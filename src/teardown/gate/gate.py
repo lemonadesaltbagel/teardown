@@ -119,8 +119,8 @@ def review(draft: SpecDraft, corpus: list[str], config: GateConfig,
         match = matcher.longest(text)
         echoed = match is not None and (own := ours.longest(" ".join(match.query_tokens))) is not None and (
             own.length >= match.length)
-        if match and match.length >= config.min_tokens and not echoed and not _covered(
-                list(match.query_tokens), quoted):
+        if match and match.length >= config.min_tokens and _wordy(match.query_tokens) >= config.min_tokens and (
+                not echoed) and not _covered(list(match.query_tokens), quoted):
             add(
                 Finding(
                     kind="verbatim",
@@ -190,6 +190,11 @@ def _string_leaves(value: Any, path: str = "$"):
     elif isinstance(value, list):
         for i, v in enumerate(value):
             yield from _string_leaves(v, f"{path}[{i}]")
+
+
+def _wordy(tokens: tuple[str, ...]) -> int:
+    """Distinct alphabetic words of 3+ letters: a run of numbers, keys and repeated literals is data, not prose."""
+    return len({t for t in tokens if len(t.strip("-")) >= 3 and any(c.isalpha() for c in t)})
 
 
 def _covered(tokens: list[str], quoted: list[list[str]]) -> bool:

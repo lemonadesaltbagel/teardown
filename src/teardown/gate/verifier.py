@@ -14,6 +14,7 @@ disagree are reported inconclusive rather than failed.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar, Literal
@@ -75,10 +76,13 @@ def conformance_suite(rel: SpecRelease, max_tests: int = 5000) -> list[_Test]:
                 seen.add(tuple(inputs))
                 tests.append(_Test(kind="transition", inputs=inputs, expect=model.run(inputs)))
     for row in spec.get("probe_table", []):
+        seen.add((row["action"],))
         tests.append(_Test(kind="probe", inputs=[row["action"]], expect=[row["expect"]]))
     for claim in spec.get("claims", []):
         if claim["status"] == "corroborated" and claim["strictness"] == "must":
             for check in [claim["check"], *claim.get("cases", [])]:
+                if tuple(check["inputs"]) in seen:
+                    continue  # already tested exactly by a probe-table row
                 tests.append(_Test(kind="claim", inputs=check["inputs"], expect=check["expect"],
                                    match=check.get("match", "exact"), claim_id=claim["id"]))
     return tests[:max_tests]
@@ -103,14 +107,15 @@ class Verifier:
         self.audit = audit
         self.max_calls = max_calls_per_release
         self.max_tests = max_tests
-        self._calls: dict[str, int] = {}
+        self._budget_file = releases_dir / "verify-budget.json"
 
     def verify(self, clone_target: str, release_id: str | None = None, repeats: int = 2) -> AbstractVerdict:
         rel = load_release(self.releases_dir, release_id)
-        used = self._calls.get(rel.id, 0)
-        if used >= self.max_calls:
+        calls = json.loads(self._budget_file.read_text()) if self._budget_file.exists() else {}
+        if calls.get(rel.id, 0) >= self.max_calls:
             raise BudgetExceeded(f"verification budget for this release is spent ({self.max_calls} calls)")
-        self._calls[rel.id] = used + 1
+        calls[rel.id] = calls.get(rel.id, 0) + 1
+        self._budget_file.write_text(json.dumps(calls))
 
         vocabulary = {o["symbol"] for o in (rel.spec.get("model") or {}).get("outputs", [])}
         vocabulary |= {row["expect"] for row in rel.spec.get("probe_table", [])}

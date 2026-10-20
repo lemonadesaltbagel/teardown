@@ -24,3 +24,4 @@ spikes/**/*.tgz
 
 # captured third-party target content stays local
 spikes/desktop-ax/*.json
+bench/jq/hidden/

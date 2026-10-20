@@ -124,6 +124,12 @@ class ProbeHints(BaseModel):
     inputs: list[str] = Field(default_factory=lambda: ["tsv", "empty", "no_eol", "crlf", "utf8", "nul"])
     pair_inputs: list[str] = Field(default_factory=lambda: ["tsv"])
     operand_type: str | None = Field(default=None, description="Value type of positional operands, if any.")
+    operand_forms: list[list[str]] = Field(
+        default_factory=lambda: [["{v}"], ["1", "{v}"], ["{v}", "3"], ["1", "{v}", "3"]],
+        description="argv templates for the operand sweep; '{v}' is replaced by each value of `operand_type`.")
+    operand_options: list[list[str]] = Field(default_factory=lambda: [[]],
+                                             description="Option prefixes the operand sweep is repeated with.")
+    stdio_modes: bool = Field(default=True, description="Probe closed/full stdout and closed stdin.")
     unicode_argv: list[list[str]] = Field(default_factory=list)
     skip_options: list[str] = Field(default_factory=list)
     extra_inputs: dict[str, str] = Field(default_factory=dict, description="Observer-supplied input samples.")
@@ -213,12 +219,18 @@ def plan_sweep(model: dict, hints: ProbeHints) -> list[Probe]:
             a, i, f = _deliver(list(hints.base), din, mode)
             ps.add(a, i, f, tags=["s:inputs", f"mode:{mode}"])
         ps.add(list(hints.base), None, tags=["s:inputs", "in:devnull", "mode:stdin"])
-    if hints.operand_type:  # positional operands, one form at a time
-        for vname, v in hints.values(hints.operand_type).items():
-            ps.add([v], tags=["s:operands", "form:1", f"val:op1.{vname}"])
-            ps.add(["1", v], tags=["s:operands", "form:2", f"val:op2.{vname}"])
-            ps.add([v, "3"], tags=["s:operands", "form:2", f"val:op1.{vname}"])
-            ps.add(["1", v, "3"], tags=["s:operands", "form:3", f"val:op2.{vname}"])
+    if hints.operand_type:  # positional operands, one form at a time, optionally over inputs
+        inputs = hints.sweep_inputs if hints.takes_files or hints.default_input else [None]
+        for prefix in hints.operand_options:
+            for form_index, form in enumerate(hints.operand_forms):
+                position = form.index("{v}") + 1 if "{v}" in form else 0
+                for vname, v in hints.values(hints.operand_type).items():
+                    argv = [*prefix, *(v if t == "{v}" else t for t in form)]
+                    for iname in inputs:
+                        data = hints.input(iname) if iname else None
+                        tags = ["s:operands", f"form:{form_index}", f"val:op{position}.{vname}",
+                                *([f"opts:{' '.join(prefix)}"] if prefix else []), *([f"in:{iname}"] if iname else [])]
+                        ps.add(argv, data, tags=tags)
         for n in ([], ["1", "2", "3", "4"]):
             ps.add(n, tags=["s:operands", f"form:arity{len(n)}"])
 
@@ -243,6 +255,15 @@ def plan_sweep(model: dict, hints: ProbeHints) -> list[Probe]:
         ps.add(argv, stdin, files, tags=["s:syntax", f"syn:{kind}"])
         if kind == "opt_after_operand":
             ps.add(argv, stdin, files, env={"POSIXLY_CORRECT": "1"}, tags=["s:syntax", f"syn:{kind}", "env:posix"])
+
+    if hints.stdio_modes:  # S6: stdio edge modes on the main invocation
+        for mode, kwargs in (("stdout:closed", {"stdout_mode": "closed"}), ("stdout:full", {"stdout_mode": "full"}),
+                             ("stdin:closed", {"stdin_mode": "closed"})):
+            probe = Probe.make(hints.cmd, list(hints.base), stdin=din if "stdin_mode" not in kwargs else None,
+                               tags=["s:stdio", f"stdio:{mode}"], **kwargs)
+            if probe.id not in ps._seen:
+                ps._seen.add(probe.id)
+                ps.probes.append(probe)
 
     for argv in hints.unicode_argv:  # S5: locale
         for loc in ("C", "C.UTF-8"):

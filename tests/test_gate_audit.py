@@ -52,7 +52,7 @@ def _draft(session, statement="Submit stays unavailable until the terms are acce
 def test_matcher_finds_longest_verbatim_run_without_crossing_documents():
     m = CorpusMatcher([LABEL, "Email address is required."])
     assert m.longest("tick 'I agree to the terms of service' first").length == 7
-    assert m.longest("required. I agree").length == 2  # never spans two corpus strings
+    assert m.longest("required I agree to").length == 3  # "i agree to": never spans two corpus strings
     assert m.longest("nothing in common") is None
 
 

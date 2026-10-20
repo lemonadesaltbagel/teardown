@@ -46,7 +46,11 @@ def _factor(tags: list[str]) -> tuple[str, str] | None:
         return "argv syntax" + (" (POSIXLY_CORRECT)" if tag.get("env") == "posix" else ""), tag["syn"]
     if strategy == "operands" and "val" in tag:
         position, _, cls = tag["val"].partition(".")
-        return f"operand {position} (form {tag.get('form', '?')})", cls
+        opts = f" with options '{tag['opts']}'" if tag.get("opts") else ""
+        on = f" on input {tag['in']}" if tag.get("in") else ""
+        return f"operand {position} (form {tag.get('form', '?')}){opts}{on}", cls
+    if strategy == "stdio" and "stdio" in tag:
+        return "stdio mode", tag["stdio"]
     if strategy == "env" and "env" in tag:
         return "locale", tag["env"]
     return None
