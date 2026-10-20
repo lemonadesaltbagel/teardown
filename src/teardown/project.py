@@ -484,17 +484,30 @@ class Project:
         from teardown.engine.probing import run_probes
 
         specs = [R.RuleSpec.model_validate({"feature": feature, **r}) for r in rules]
+        workers = self.max_workers(workers)
         invocations: dict[str, dict[str, Any]] = {}
+        sequences: dict[str, list[str]] = {}
         for spec in specs:
             for check in spec.checks:
                 for side in (check.a, check.b):
-                    if side is not None:
-                        inv = Invocation.model_validate(side).model_dump(mode="json")
-                        invocations[R.action_id(side)] = inv
+                    if side is None:
+                        continue
+                    if "actions" in side:  # UI rule: a sequence of named actions
+                        sequences[R.action_id(side)] = list(side["actions"])
+                    else:
+                        invocations[R.action_id(side)] = Invocation.model_validate(side).model_dump(mode="json")
+        if sequences:
+            from teardown.engine.fieldprobe import SequenceProbe, run_sequences
+
+            seq_probes = [SequenceProbe(id=k, inputs=v) for k, v in sequences.items()]
+            first = {r.probe.id: r.symbol for r in run_sequences(self._worker_session, seq_probes, workers=workers)}
+            second = {r.probe.id: r.symbol for r in run_sequences(self._worker_session, seq_probes, workers=workers)}
+        else:
+            first, second = {}, {}
         probes = [Probe(id=k, invocation=Invocation.model_validate(v), tags=["s:rule"]) for k, v in invocations.items()]
-        workers = self.max_workers(workers)
-        first = {r.probe.id: r.symbol for r in run_probes(self._worker_session, probes, workers=workers)}
-        second = {r.probe.id: r.symbol for r in run_probes(self._worker_session, probes, workers=workers)}
+        if probes:
+            first |= {r.probe.id: r.symbol for r in run_probes(self._worker_session, probes, workers=workers)}
+            second |= {r.probe.id: r.symbol for r in run_probes(self._worker_session, probes, workers=workers)}
         unstable = {k for k in first if first[k] != second[k]}
         records = []
         for spec in specs:

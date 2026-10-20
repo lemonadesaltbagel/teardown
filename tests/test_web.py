@@ -94,3 +94,22 @@ def test_field_probing_finds_length_boundary_and_refusal_classes(site, tmp_path)
     rel = project.release_spec(project.compile_spec("signup").id)
     variant = project.verifier().verify("web:" + site.url("signup_b.html"), repeats=1)
     assert rel.spec["probe_table"] and variant.failed > 0  # signup_b allows 50 characters
+
+
+def test_web_rules_relations(site, tmp_path):
+    project = Project(tmp_path / "p")
+    project.open_target("web:" + site.url("signup_a.html"), purpose="research")
+    project.define_actions(ACTIONS)
+    to_terms = ["email_ok", "next", "pw_ok", "next"]
+    rules = [{"statement": "Going back from the terms step and forward again keeps the step's state.",
+              "checks": [{"kind": "same", "a": {"actions": to_terms}, "b": {"actions": [*to_terms, "back", "next"]},
+                          "keys": ["controls"]}]},
+             {"statement": "Submitting is impossible before agreeing.", "kind": "refusal",
+              "checks": [{"kind": "outcome", "a": {"actions": [*to_terms, "submit"]}, "expect": {"value": "x"}}]}]
+    result = project.check_rules("signup", rules, workers=1)
+    assert [r["status"] for r in result["rules"]] == ["corroborated", "falsified"]
+    project.release_spec(project.compile_spec("signup").id)
+    verifier = project.verifier()
+    assert verifier.verify("web:" + site.url("signup_a.html"), repeats=1).failed == 0
+    variant = verifier.verify("web:" + site.url("signup_b.html"), repeats=1)  # b clears the password on Back
+    assert variant.failed == 1 and variant.results[0].note == "relation violated"

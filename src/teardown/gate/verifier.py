@@ -94,12 +94,14 @@ def conformance_suite(rel: SpecRelease, max_tests: int = 5000) -> list[_Test]:
         if rule["status"] != "corroborated":
             continue
         for check in rule["checks"]:
+            a = check.get("a_inputs") or [check["a"]]
             if check["kind"] == "outcome":
-                tests.append(_Test(kind="rule", inputs=[check["a"]], expect=[check["expect"]], match="subset",
-                                   claim_id=rule["id"]))
+                tests.append(_Test(kind="rule", inputs=a, expect=[None] * (len(a) - 1) + [check["expect"]],
+                                   match="subset", claim_id=rule["id"]))
             else:
-                tests.append(_Test(kind="rule", inputs=[check["a"]], expect=[None], claim_id=rule["id"],
-                                   relation=check["kind"], other=[check["b"]], keys=check.get("keys")))
+                b = check.get("b_inputs") or [check["b"]]
+                tests.append(_Test(kind="rule", inputs=a, expect=[None] * len(a), claim_id=rule["id"],
+                                   relation=check["kind"], other=b, keys=check.get("keys")))
     return tests[:max_tests]
 
 

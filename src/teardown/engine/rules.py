@@ -32,8 +32,8 @@ class RuleCheck(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["outcome", "same", "differs"]
-    a: dict[str, Any] = Field(description="Invocation (CLI) for the first side.")
-    b: dict[str, Any] | None = Field(default=None, description="Second invocation for same/differs.")
+    a: dict[str, Any] = Field(description="First side: a CLI invocation, or {'actions': [named actions]} for UIs.")
+    b: dict[str, Any] | None = Field(default=None, description="Second side for same/differs.")
     expect: dict[str, Any] | None = Field(default=None, description="Subset of the behavior symbol (outcome).")
     keys: list[str] | None = Field(default=None, description="Compare only these symbol keys (same/differs).")
 
@@ -54,6 +54,8 @@ class CheckResult(BaseModel):
     kind: str
     a: str
     b: str | None = None
+    a_inputs: list[str] | None = Field(default=None, description="UI rules: the action sequence of side a.")
+    b_inputs: list[str] | None = None
     expect: str | None = None
     keys: list[str] | None = None
     observed_a: str
@@ -82,8 +84,12 @@ class RuleTable(ContentAddressed):
     rules: list[RuleRecord]
 
 
-def action_id(invocation: dict[str, Any]) -> str:
-    return content_id("act", invocation)[:24]
+def action_id(side: dict[str, Any]) -> str:
+    return content_id("act", side)[:24]
+
+
+def sequence(side: dict[str, Any] | None) -> list[str] | None:
+    return list(side["actions"]) if side and "actions" in side else None
 
 
 def projection(symbol: str, keys: list[str] | None) -> Any:
@@ -106,8 +112,8 @@ def evaluate(check: RuleCheck, symbols: dict[str, str]) -> CheckResult:
         equal = projection(sa, check.keys) == projection(sb, check.keys)
         holds = equal if check.kind == "same" else not equal
         expect = None
-    return CheckResult(kind=check.kind, a=a, b=b, expect=expect, keys=check.keys, observed_a=sa, observed_b=sb,
-                       holds=holds)
+    return CheckResult(kind=check.kind, a=a, b=b, a_inputs=sequence(check.a), b_inputs=sequence(check.b),
+                       expect=expect, keys=check.keys, observed_a=sa, observed_b=sb, holds=holds)
 
 
 def status_of(results: list[CheckResult]) -> str:

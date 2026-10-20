@@ -23,7 +23,11 @@ directory. Ask questions by writing them to `questions.md`.
     `stdin_mode`, `stdout_mode`).
   - `probe_table`: for each action, the expected behavior symbol (exit code, exact stdout, whether a diagnostic is
     written to stderr and its errno class, file-system effects).
-  - `claims`: generalizations over the probes (value classes, refusals), each with checks.
+  - `rules`: behavioral rules stated by the observer, each with checks and the original's observed symbols.
+    `outcome` checks give an invocation and the expected part of its symbol; `same`/`differs` checks say two
+    invocations must behave alike / differently (optionally on some `keys`). **Rules are the generalizations to build
+    from; probes are worked examples.** The verifier tests the relations on your build, not only fixed outputs.
+  - `claims`: generalizations mined from the probes (value classes, refusals), each with checks.
   - `interface`: option names, arity and value types.
   - `unknowns`: what the observer could not establish.
 - Contract: {contract}
