@@ -121,7 +121,11 @@ class Project:
     def __init__(self, root: str | Path):
         self.root = Path(root)
         self.workspace = Workspace(self.root / "workspace")
-        self.audit = AuditLog(self.root / "audit.jsonl")
+        from teardown.audit.signing import Signer
+
+        # The dirty zone's signing key lives with the project; the clean side never receives it.
+        self.signer = Signer(self.root / "keys" / "observer.ed25519.pem")
+        self.audit = AuditLog(self.root / "audit.jsonl", signer=self.signer)
         self.releases_dir = self.root / "releases"
         self.tickets_dir = self.root / "tickets"
         self.ledger = ClaimLedger(self.workspace, self.audit)

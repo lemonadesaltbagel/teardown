@@ -110,3 +110,16 @@ def test_audit_chain_detects_tampering(tmp_path):
     (tmp_path / "audit.jsonl").write_text("\n".join(lines) + "\n")
     with pytest.raises(AuditChainBroken):
         log.verify()
+
+
+def test_audit_entries_are_dsse_signed(tmp_path):
+    from teardown.audit.signing import Signer
+
+    signer = Signer(tmp_path / "k.pem")
+    log = AuditLog(tmp_path / "audit.jsonl", signer=signer)
+    log.append("spec-release", {"release": "rel_" + "0" * 64}, {"mode": "strict"})
+    keys = {signer.keyid: signer.public_pem}
+    assert log.verify(keys) == 1 and (tmp_path / "k.pem").stat().st_mode & 0o777 == 0o600
+    other = Signer(tmp_path / "other.pem")
+    with pytest.raises(AuditChainBroken):
+        log.verify({other.keyid: other.public_pem})  # signature by an unknown key

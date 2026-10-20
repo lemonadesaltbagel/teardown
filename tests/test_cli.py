@@ -40,8 +40,15 @@ def test_help_parsing_keeps_structure_not_prose():
 
 
 def test_behavior_abstraction_drops_wording_keeps_behavior():
-    obs = {"exit": 1, "signal": None, "timed_out": False, "stdout": "", "stdout_truncated": False,
-           "stderr": "cut: in.txt: No such file or directory\n", "fs": []}
+    obs = {
+        "exit": 1,
+        "signal": None,
+        "timed_out": False,
+        "stdout": "",
+        "stdout_truncated": False,
+        "stderr": "cut: in.txt: No such file or directory\n",
+        "fs": [],
+    }
     sym = cli_behavior(obs, {})
     assert sym == {"exit": 1, "stdout": "", "diagnostic": True, "errno": "ENOENT"}
     assert errno_class("tool: whatever: Permission denied") == "EACCES"
@@ -92,8 +99,14 @@ def test_cli_round_trip_locally_on_system_cut(tmp_path):
     Portable across GNU and BSD cut; BSD cut has no --help, so discovery finds little and the table is small."""
     project = Project(tmp_path / "p")
     project.open_target("cli:local", purpose="research")
-    hints = {"cmd": "cut", "base": ["-f", "2"], "selector_options": ["-b", "-c", "-f"], "sweep_inputs": ["tsv"],
-             "inputs": ["tsv", "empty", "no_eol"], "pair_inputs": ["tsv"]}
+    hints = {
+        "cmd": "cut",
+        "base": ["-f", "2"],
+        "selector_options": ["-b", "-c", "-f"],
+        "sweep_inputs": ["tsv"],
+        "inputs": ["tsv", "empty", "no_eol"],
+        "pair_inputs": ["tsv"],
+    }
     summary = project.probe_cli("cut", hints, workers=2, env_sample=20)
     assert summary["claims"] > 0 and summary["rows"] > 10
     statuses = {c.status for c in project.ledger.all().values()}
@@ -123,8 +136,14 @@ def test_container_isolation():
 def test_differential_gnu_vs_busybox(tmp_path):
     project = Project(tmp_path / "p")
     project.open_target("cli:docker:debian:stable-slim", purpose="interop")
-    hints = {"cmd": "cut", "base": ["-f", "2"], "selector_options": ["-b", "-c", "-f"], "sweep_inputs": ["tsv"],
-             "inputs": ["tsv", "empty"], "pair_inputs": ["tsv"]}
+    hints = {
+        "cmd": "cut",
+        "base": ["-f", "2"],
+        "selector_options": ["-b", "-c", "-f"],
+        "sweep_inputs": ["tsv"],
+        "inputs": ["tsv", "empty"],
+        "pair_inputs": ["tsv"],
+    }
     project.probe_cli("cut", hints, env_sample=20)
     project.release_spec(project.compile_spec("cut").id)
     verifier = project.verifier()
@@ -134,18 +153,56 @@ def test_differential_gnu_vs_busybox(tmp_path):
 
 
 SORT_RULES = [
-    {"statement": "Input order does not affect the output.", "origin": "documented", "checks": [
-        {"kind": "same", "a": {"argv": ["sort"], "stdin": "b\na\nc\n"}, "b": {"argv": ["sort"], "stdin": "c\nb\na\n"}}]},
-    {"statement": "-r reverses the order.", "checks": [
-        {"kind": "differs", "a": {"argv": ["sort"], "stdin": "b\na\n"}, "b": {"argv": ["sort", "-r"], "stdin": "b\na\n"},
-         "keys": ["stdout"]}]},
-    {"statement": "A missing input file is refused with ENOENT.", "kind": "refusal", "checks": [
-        {"kind": "outcome", "a": {"argv": ["sort", "missing.txt"]}, "expect": {"diagnostic": True, "errno": "ENOENT"}}]},
-    {"statement": "Sorting is case-insensitive.", "origin": "documented", "checks": [  # false for sort in the C locale
-        {"kind": "same", "a": {"argv": ["sort"], "stdin": "a\nB\n", "env": {"LC_ALL": "C"}},
-         "b": {"argv": ["sort"], "stdin": "B\na\n", "env": {"LC_ALL": "C"}}, "keys": []},
-        {"kind": "outcome", "a": {"argv": ["sort"], "stdin": "a\nB\n", "env": {"LC_ALL": "C"}},
-         "expect": {"stdout": "a\nB\n"}}]},
+    {
+        "statement": "Input order does not affect the output.",
+        "origin": "documented",
+        "checks": [
+            {
+                "kind": "same",
+                "a": {"argv": ["sort"], "stdin": "b\na\nc\n"},
+                "b": {"argv": ["sort"], "stdin": "c\nb\na\n"},
+            }
+        ],
+    },
+    {
+        "statement": "-r reverses the order.",
+        "checks": [
+            {
+                "kind": "differs",
+                "a": {"argv": ["sort"], "stdin": "b\na\n"},
+                "b": {"argv": ["sort", "-r"], "stdin": "b\na\n"},
+                "keys": ["stdout"],
+            }
+        ],
+    },
+    {
+        "statement": "A missing input file is refused with ENOENT.",
+        "kind": "refusal",
+        "checks": [
+            {
+                "kind": "outcome",
+                "a": {"argv": ["sort", "missing.txt"]},
+                "expect": {"diagnostic": True, "errno": "ENOENT"},
+            }
+        ],
+    },
+    {
+        "statement": "Sorting is case-insensitive.",
+        "origin": "documented",
+        "checks": [  # false for sort in the C locale
+            {
+                "kind": "same",
+                "a": {"argv": ["sort"], "stdin": "a\nB\n", "env": {"LC_ALL": "C"}},
+                "b": {"argv": ["sort"], "stdin": "B\na\n", "env": {"LC_ALL": "C"}},
+                "keys": [],
+            },
+            {
+                "kind": "outcome",
+                "a": {"argv": ["sort"], "stdin": "a\nB\n", "env": {"LC_ALL": "C"}},
+                "expect": {"stdout": "a\nB\n"},
+            },
+        ],
+    },
 ]
 
 
@@ -174,9 +231,22 @@ def test_input_mutations_and_coverage(tmp_path):
     assert muts["no_final_newline"] == "a\nb\nc"
     project = Project(tmp_path / "p")
     project.open_target("cli:local", purpose="research")
-    project.probe_cli("sort", {"cmd": "sort", "base": [], "default_input": "dups", "sweep_inputs": ["dups"],
-                               "inputs": ["dups"], "pair_inputs": [], "mutation_lines": {"hash": "# x"},
-                               "stdio_modes": False}, workers=2, env_sample=5, pairwise=False)
+    project.probe_cli(
+        "sort",
+        {
+            "cmd": "sort",
+            "base": [],
+            "default_input": "dups",
+            "sweep_inputs": ["dups"],
+            "inputs": ["dups"],
+            "pair_inputs": [],
+            "mutation_lines": {"hash": "# x"},
+            "stdio_modes": False,
+        },
+        workers=2,
+        env_sample=5,
+        pairwise=False,
+    )
     report = project.coverage("sort", {"reverse flag": ["-r"], "made-up feature": ["--frobnicate"]})
     assert report["counts"]["reverse flag"] > 0 and "made-up feature" in report["uncovered"]
     assert any("made-up feature" in u.identity.question for u in project.ledger.unknowns().values())

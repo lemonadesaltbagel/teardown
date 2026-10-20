@@ -870,6 +870,7 @@ name = "teardown"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "mcp" },
     { name = "pydantic" },
 ]
@@ -893,6 +894,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aalpy", marker = "extra == 'learn'", specifier = ">=1.6.2" },
+    { name = "cryptography", specifier = ">=44" },
     { name = "mcp", specifier = ">=2.3" },
     { name = "playwright", marker = "extra == 'web'", specifier = ">=1.64" },
     { name = "pydantic", specifier = ">=2.14" },

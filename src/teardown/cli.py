@@ -15,9 +15,16 @@ def main(argv: list[str] | None = None) -> int:
     observe.add_argument("--project", required=True, type=Path)
 
     clean = sub.add_parser("clean", help="run the clean-side MCP server on stdio")
-    clean.add_argument("--project", required=True, type=Path,
-                       help="Phase 0: the verifier runs in-process, so the clean server needs the project path. "
-                            "Phase 3 replaces this with a verifier endpoint and a releases directory only.")
+    where = clean.add_mutually_exclusive_group(required=True)
+    where.add_argument("--gate-url", help="URL of the gate service (the clean side needs nothing else)")
+    where.add_argument("--project", type=Path, help="development only: run the verifier in-process")
+    clean.add_argument("--token", help="bearer token for the gate service")
+
+    gate = sub.add_parser("gate-serve", help="serve the verifier/spec/tickets over HTTP for the clean side")
+    gate.add_argument("--project", required=True, type=Path)
+    gate.add_argument("--host", default="127.0.0.1")
+    gate.add_argument("--port", type=int, default=8765)
+    gate.add_argument("--token", help="require this bearer token")
 
     demo = sub.add_parser("demo", help="run the scripted observe -> gate -> clean -> verdict round trip")
     demo.add_argument("--project", type=Path, default=Path(".teardown/demo"))
@@ -131,6 +138,15 @@ def main(argv: list[str] | None = None) -> int:
 
         print(f"ok: {AuditLog(args.project / 'audit.jsonl').verify()} entries")
     return 0
+
+
+def _local_room(project):
+    from teardown.mcp.clean_server import CleanRoom
+
+    def verify(clone, adapter=None):
+        return project.verifier().verify(clone, adapter=adapter).model_dump(mode="json")
+
+    return CleanRoom(project.releases_dir, project.tickets_dir, verify)
 
 
 if __name__ == "__main__":

@@ -80,3 +80,29 @@ def test_mcp_servers_expose_the_expected_tools(demo):
     assert not clean_tools & observe_tools
     spec = asyncio.run(call_get_spec())
     assert spec["release"] == demo["release"].id
+
+
+def test_gate_service_serves_spec_verdicts_and_tickets_over_http(demo):
+    from teardown.gate.service import RemoteCleanRoom, serve
+
+    project: Project = demo["project"]
+
+    def verify(clone, adapter=None):
+        return project.verifier().verify(clone, adapter=adapter).model_dump(mode="json")
+
+    server = serve(CleanRoom(project.releases_dir, project.tickets_dir, verify), token="s3cret")
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        remote = RemoteCleanRoom(url, "s3cret")
+        assert remote.get_spec()["release"] == demo["release"].id
+        verdict = remote.verify_against_original("fake:py:teardown.examples.signup_clone:CleanSignup")
+        assert verdict["failed"] == 0 and verdict["passed"] > 0
+        ticket = remote.ask_question("Does Back keep the email?")
+        assert remote.get_ticket(ticket["ticket"])["status"] == "open"
+        import urllib.error
+
+        with pytest.raises(urllib.error.HTTPError) as err:
+            RemoteCleanRoom(url, "wrong").get_spec()
+        assert err.value.code == 401
+    finally:
+        server.shutdown()
