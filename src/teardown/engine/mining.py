@@ -53,6 +53,8 @@ def _factor(tags: list[str]) -> tuple[str, str] | None:
         return f"operand {position} (form {tag.get('form', '?')}){opts}{on}", cls
     if strategy == "field" and "field" in tag:
         return f"field {tag['field']}", tag.get("val", "?")
+    if strategy == "mutation" and "mut" in tag:
+        return "input mutation" + (f" with '{tag['argv']}'" if tag.get("argv") else ""), tag["mut"]
     if strategy == "designed" and "case" in tag:
         return "designed case", tag["case"]
     if strategy == "stdio" and "stdio" in tag:

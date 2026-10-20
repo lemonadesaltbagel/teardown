@@ -139,6 +139,20 @@ class Workspace:
             for s in new:
                 fh.write(json.dumps({"evidence": evidence.id, "text": s}, ensure_ascii=False) + "\n")
 
+    def add_reference_text(self, source: str, text: str) -> int:
+        """Add documentation text (manual, help pages) to the gate's corpus, one paragraph per entry, so that rules
+        copying its wording are flagged like copied UI text. Returns the number of entries added."""
+        paragraphs = [p.strip() for p in text.replace("\r\n", "\n").split("\n\n") if p.strip()]
+        with self._lock:
+            if self._corpus_seen is None:
+                self._corpus_seen = set(self.corpus())
+            new = [p for p in paragraphs if p not in self._corpus_seen]
+            self._corpus_seen.update(new)
+            with (self.root / "corpus" / "strings.jsonl").open("a", encoding="utf-8") as fh:
+                for para in new:
+                    fh.write(json.dumps({"evidence": f"doc:{source}", "text": para}, ensure_ascii=False) + "\n")
+        return len(new)
+
     def add_supplied(self, strings: list[str]) -> None:
         """Text Teardown itself fed to the target (probe inputs, argv). The gate does not count it as leaked."""
         with self._lock:

@@ -75,6 +75,7 @@ class SpecDraft(ContentAddressed):
     model: ModelRecord | None = None
     probes: ProbeTable | None = None
     actions: dict[str, dict[str, Any]] = Field(default_factory=dict, description="Named actions (definitions).")
+    rules: Any = Field(default=None, description="RuleTable of observer-authored rules, if any.")
     claims: list[Claim] = Field(default_factory=list)
     unknowns: list[Unknown] = Field(default_factory=list)
 
@@ -85,6 +86,12 @@ class SpecDraft(ContentAddressed):
             used = {a for r in self.probes.rows for a in [*r.prefix, r.action]}
             used |= {a for c in self.claims for check in c.identity.all_checks() for a in check.inputs}
             actions.update({k: v for k, v in sorted(self.probes.actions.items()) if k in used})
+        rule_records = []
+        if self.rules is not None:
+            table = self.rules if isinstance(self.rules, dict) else self.rules.model_dump(mode="json")
+            actions.update(table["actions"])
+            rule_records = [{k: r[k] for k in ("id", "statement", "origin", "kind", "status", "checks")}
+                            for r in table["rules"]]
         return {
             "feature": self.feature,
             "vocabulary": self.mapper,
@@ -95,9 +102,10 @@ class SpecDraft(ContentAddressed):
             "model": model.model_dump(mode="json") if model else None,
             "requirements": to_ears(model) if model else [],
             "xstate": to_xstate(model) if model else None,
-            "interface": _interface(self.probes.discovery) if self.probes else None,
+            "interface": _interface(self.probes.discovery) if self.probes and self.probes.discovery else None,
             "actions": actions,
             "probe_table": [r.model_dump(mode="json") for r in self.probes.rows] if self.probes else [],
+            "rules": rule_records,
             "claims": [
                 {
                     "id": c.id,

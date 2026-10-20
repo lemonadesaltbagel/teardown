@@ -18,6 +18,7 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, ConfigDict, Field
 
 from teardown.audit.log import AuditLog
+from teardown.core.ids import content_id
 from teardown.core.model import ContentAddressed, MapperRule, MapperVersion
 from teardown.core.store import Workspace
 from teardown.drivers.base import Driver
@@ -110,6 +111,7 @@ class ProjectState(BaseModel):
     gate: GateConfig
     models: dict[str, str] = Field(default_factory=dict, description="feature -> latest model record id")
     probes: dict[str, str] = Field(default_factory=dict, description="feature -> latest probe table id")
+    rules: dict[str, str] = Field(default_factory=dict, description="feature -> latest rule table id")
     actions: dict[str, dict[str, Any]] = Field(default_factory=dict, description="named actions (invocations)")
     target_options: dict[str, Any] = Field(default_factory=dict,
                                            description="driver options, e.g. reset_command, reset_check_url")
@@ -203,6 +205,10 @@ class Project:
         table = dict(state.actions)
         for table_id in state.probes.values():
             table.update(self.workspace.get(table_id, ProbeTable).actions)
+        from teardown.engine.rules import RuleTable
+
+        for table_id in state.rules.values():
+            table.update(self.workspace.get(table_id, RuleTable).actions)
         return table
 
     def define_actions(self, actions: dict[str, dict[str, Any]]) -> None:
@@ -281,10 +287,14 @@ class Project:
     def compile_spec(self, feature: str) -> SpecDraft:
         state = self.state
         feature_claims = [c for c in self.ledger.all().values() if c.identity.feature == feature]
-        if feature not in state.models and feature not in state.probes and not feature_claims:
+        known = feature in state.models or feature in state.probes or feature in state.rules
+        if not known and not feature_claims:
             raise KeyError(f"nothing learned, probed or claimed for feature {feature!r}")
         record = self.workspace.get(state.models[feature], ModelRecord) if feature in state.models else None
         probes = self.workspace.get(state.probes[feature], ProbeTable) if feature in state.probes else None
+        from teardown.engine.rules import RuleTable
+
+        rule_table = self.workspace.get(state.rules[feature], RuleTable) if feature in state.rules else None
         version = self.workspace.get(state.mapper, MapperVersion)
         abstraction = {"builtin": version.builtin, "params": version.params} if version.builtin else {}
         claims = [c for c in self.ledger.all().values() if c.identity.feature == feature]
@@ -292,10 +302,12 @@ class Project:
         draft = SpecDraft(
             feature=feature,
             target=state.target,
-            mapper=record.mapper if record else probes.mapper if probes else state.mapper,
+            mapper=(record.mapper if record else probes.mapper if probes else
+                    rule_table.mapper if rule_table else state.mapper),
             abstraction=abstraction,
             model=record,
             probes=probes,
+            rules=rule_table,
             actions=state.actions,
             claims=sorted(claims, key=lambda c: c.id),
             unknowns=sorted(unknowns, key=lambda u: u.id),
@@ -414,6 +426,105 @@ class Project:
             "mixed": len(mixed)})
         return {"table": table.id, "probes": len(results), "rows": len(table.rows), "claims": len(mined),
                 "mixed": len(mixed), "noise": noise.model_dump(mode="json"), "accepted": accepted}
+
+    def ingest_docs(self, source: str, text: str) -> int:
+        """Register public documentation the observer read. It stays dirty-side; its paragraphs join the gate corpus
+        so verbatim reuse in rules or claims is flagged. Rules derived from it should use origin='documented'."""
+        n = self.workspace.add_reference_text(source, text)
+        self.audit.append("docs-ingested", {}, {"source": source, "paragraphs": n})
+        return n
+
+    # -- coverage ------------------------------------------------------------------------------------------------
+    def coverage(self, feature: str, inventory: dict[str, list[str]] | None = None, *,
+                 record_unknowns: bool = True) -> dict[str, Any]:
+        """Feature inventory -> number of probes and rule checks exercising each item.
+
+        An item is exercised when any of its patterns occurs in an action's argv or stdin. The inventory defaults to
+        the discovered options; the observer adds documented items (functions, formats, modes, edge cases).
+        Uncovered items become explicit unknowns: missing coverage is unknown, not absence.
+        """
+        from teardown.engine.rules import RuleTable
+
+        state = self.state
+        items = dict(inventory or {})
+        table = self.workspace.get(state.probes[feature], ProbeTable) if feature in state.probes else None
+        if table and table.discovery.get("model"):
+            for o in table.discovery["model"]["options"].values():
+                if not o.get("phantom") and o["names"][0] not in ("--help", "--version", "-h"):
+                    items.setdefault(f"option {'/'.join(o['names'])}", list(o["names"]))
+        actions = list(table.actions.values()) if table else []
+        if feature in state.rules:
+            actions += list(self.workspace.get(state.rules[feature], RuleTable).actions.values())
+
+        def exercises(action: dict[str, Any], pattern: str) -> bool:
+            argv = action.get("argv", [])[1:]
+            if pattern.startswith("-"):  # an option: a token, --opt=value, or a short option attached/bundled
+                return any(t == pattern or t.startswith(pattern + "=") or (
+                    len(pattern) == 2 and t.startswith("-") and not t.startswith("--") and pattern[1] in t[1:])
+                    for t in argv)
+            return pattern in " ".join(argv) or pattern in (action.get("stdin") or "")
+
+        counts = {item: sum(any(exercises(a, pat) for pat in patterns) for a in actions)
+                  for item, patterns in items.items()}
+        uncovered = sorted(i for i, n in counts.items() if n == 0)
+        if record_unknowns:
+            for item in uncovered:
+                self.ledger.record_unknown(feature, f"not exercised by any probe or rule: {item}",
+                                           ["add probes or a rule for this item"])
+        self.audit.append("coverage", {}, {"feature": feature, "items": len(items), "uncovered": len(uncovered)})
+        return {"items": len(items), "covered": len(items) - len(uncovered), "uncovered": uncovered,
+                "counts": counts}
+
+    # -- rules ---------------------------------------------------------------------------------------------------
+    def check_rules(self, feature: str, rules: list[dict[str, Any]], workers: int = 4) -> dict[str, Any]:
+        """Run observer-authored rules against the original (CLI targets) and record them for the spec."""
+        from teardown.drivers.cli.invocation import Invocation
+        from teardown.drivers.cli.plan import Probe
+        from teardown.engine import rules as R
+        from teardown.engine.probing import run_probes
+
+        specs = [R.RuleSpec.model_validate({"feature": feature, **r}) for r in rules]
+        invocations: dict[str, dict[str, Any]] = {}
+        for spec in specs:
+            for check in spec.checks:
+                for side in (check.a, check.b):
+                    if side is not None:
+                        inv = Invocation.model_validate(side).model_dump(mode="json")
+                        invocations[R.action_id(side)] = inv
+        probes = [Probe(id=k, invocation=Invocation.model_validate(v), tags=["s:rule"]) for k, v in invocations.items()]
+        workers = self.max_workers(workers)
+        first = {r.probe.id: r.symbol for r in run_probes(self._worker_session, probes, workers=workers)}
+        second = {r.probe.id: r.symbol for r in run_probes(self._worker_session, probes, workers=workers)}
+        unstable = {k for k in first if first[k] != second[k]}
+        records = []
+        for spec in specs:
+            results = [R.evaluate(c, first) for c in spec.checks]
+            noisy = any(r.a in unstable or (r.b in unstable) for r in results)
+            status = "contested" if noisy else R.status_of(results)
+            rid = content_id("rle", {"feature": feature, "statement": spec.statement,
+                                     "checks": [c.model_dump(mode="json") for c in spec.checks]})
+            records.append(R.RuleRecord(id=rid, statement=spec.statement, origin=spec.origin, kind=spec.kind,
+                                        status=status, checks=results))
+        state = self.state
+        old = self.workspace.get(state.rules[feature], R.RuleTable) if feature in state.rules else None
+        merged = {r.id: r for r in (old.rules if old else [])}
+        merged.update({r.id: r for r in records})
+        table = R.RuleTable(feature=feature, target=state.target, mapper=state.mapper,
+                            actions={**(old.actions if old else {}), **invocations}, rules=list(merged.values()))
+        self.workspace.put(table)
+        self._save(state.model_copy(update={"rules": {**state.rules, feature: table.id}}))
+        self.workspace.add_supplied([str(x) for v in invocations.values() for x in _flatten(v)])
+        self._reset_session()
+        conflicts = [r for r in records if r.origin == "documented" and r.status != "corroborated"]
+        for r in conflicts:
+            self.ledger.record_unknown(feature, f"documentation/behavior conflict: '{r.statement}' is {r.status}",
+                                       ["decide which one the reimplementation should follow"])
+        self.audit.append("rules-checked", {"table": table.id}, {
+            "feature": feature, "rules": len(records), "corroborated": sum(r.status == "corroborated" for r in records),
+            "falsified": sum(r.status == "falsified" for r in records), "conflicts": len(conflicts)})
+        return {"table": table.id, "rules": [{"statement": r.statement, "status": r.status,
+                                              "failed_checks": [i for i, c in enumerate(r.checks) if not c.holds]}
+                                             for r in records]}
 
     # -- web field probing -------------------------------------------------------------------------------------
     def probe_web_field(self, feature: str, *, prefix: list[str], role: str, name: str, submit: str,

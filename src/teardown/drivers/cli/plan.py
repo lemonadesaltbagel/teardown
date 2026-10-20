@@ -132,6 +132,11 @@ class ProbeHints(BaseModel):
     stdio_modes: bool = Field(default=True, description="Probe closed/full stdout and closed stdin.")
     extra_argv: dict[str, list[str]] = Field(
         default_factory=dict, description="Observer-designed probes: class name -> argv (run on default_input).")
+    mutation_lines: dict[str, str] = Field(
+        default_factory=dict, description="Lines to insert into the default input (name -> line), e.g. comment- or "
+        "header-like lines, escapes, odd field counts.")
+    mutation_argv: list[list[str]] = Field(default_factory=list,
+                                           description="argv variants the input mutations run with (default: base)")
     unicode_argv: list[list[str]] = Field(default_factory=list)
     skip_options: list[str] = Field(default_factory=list)
     extra_inputs: dict[str, str] = Field(default_factory=dict, description="Observer-supplied input samples.")
@@ -262,6 +267,12 @@ def plan_sweep(model: dict, hints: ProbeHints) -> list[Probe]:
         if kind == "opt_after_operand":
             ps.add(argv, stdin, files, env={"POSIXLY_CORRECT": "1"}, tags=["s:syntax", f"syn:{kind}", "env:posix"])
 
+    if din:  # S8: input mutations of the default input
+        for mname, data in mutations(din, hints.mutation_lines).items():
+            for argv in hints.mutation_argv or [list(hints.base)]:
+                tags = ["s:mutation", f"mut:{mname}", *([f"argv:{' '.join(argv)}"] if argv != hints.base else [])]
+                ps.add(list(argv), data, tags=tags)
+
     for cname, argv in hints.extra_argv.items():  # S7: observer-designed probes (orderings, combinations, ...)
         files = {"in.txt": din, "in2.txt": din} if din is not None and any(a.startswith("in") for a in argv) else {}
         ps.add(list(argv), None if files else din, files, tags=["s:designed", f"case:{cname}"])
@@ -371,3 +382,31 @@ def plan_pairwise(model: dict, hints: ProbeHints, accepted: dict[str, list[str]]
         extra = [f"in:{row['@input']}", f"mode:{row['@mode']}"] if data is not None else []
         ps.add(a, i, f, tags=tags + extra)
     return ps.probes
+
+
+def mutations(data: str, lines: dict[str, str] | None = None) -> dict[str, str]:
+    """Generic edits of a line-oriented input; ``lines`` are inserted at the start, the middle and the end."""
+    rows = data.splitlines(keepends=False)
+    eol = "\n"
+    body = eol.join(rows) + (eol if data.endswith(("\n", "\r")) else "")
+    mid = max(1, len(rows) // 2)
+    out = {
+        "no_final_newline": body.rstrip("\r\n"),
+        "crlf": "\r\n".join(rows) + "\r\n",
+        "bom": "\xef\xbb\xbf" + body,
+        "blank_line_middle": eol.join(rows[:mid] + [""] + rows[mid:]) + eol,
+        "whitespace_line_middle": eol.join(rows[:mid] + ["   \t "] + rows[mid:]) + eol,
+        "trailing_spaces": eol.join(r + "   " for r in rows) + eol,
+        "leading_spaces": eol.join("  " + r for r in rows) + eol,
+        "duplicate_first": eol.join(rows[:1] + rows) + eol,
+        "duplicate_last": eol.join(rows + rows[-1:]) + eol,
+        "first_line_only": (rows[0] + eol) if rows else "",
+        "drop_first": eol.join(rows[1:]) + eol,
+        "invalid_utf8_line": eol.join(rows[:mid] + ["\xff\xfe"] + rows[mid:]) + eol,
+        "double_blank_end": body + eol + eol,
+    }
+    for name, line in (lines or {}).items():
+        out[f"{name}@start"] = eol.join([line] + rows) + eol
+        out[f"{name}@middle"] = eol.join(rows[:mid] + [line] + rows[mid:]) + eol
+        out[f"{name}@end"] = eol.join(rows + [line]) + eol
+    return out

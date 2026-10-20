@@ -38,7 +38,7 @@ class TestResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     test: int
-    kind: Literal["transition", "probe", "claim"]
+    kind: Literal["transition", "probe", "claim", "rule"]
     claim_id: str | None = None
     status: Literal["pass", "fail", "inconclusive"]
     step: int | None = None
@@ -60,11 +60,14 @@ class AbstractVerdict(ContentAddressed):
 
 
 class _Test(BaseModel):
-    kind: Literal["transition", "probe", "claim"]
+    kind: Literal["transition", "probe", "claim", "rule"]
     inputs: list[str]
     expect: list[str | None]
     match: Literal["exact", "subset"] = "exact"
     claim_id: str | None = None
+    relation: Literal["same", "differs"] | None = None
+    other: list[str] | None = None
+    keys: list[str] | None = None
 
 
 def conformance_suite(rel: SpecRelease, max_tests: int = 5000) -> list[_Test]:
@@ -87,6 +90,16 @@ def conformance_suite(rel: SpecRelease, max_tests: int = 5000) -> list[_Test]:
                     continue  # already tested exactly by a probe-table row
                 tests.append(_Test(kind="claim", inputs=check["inputs"], expect=check["expect"],
                                    match=check.get("match", "exact"), claim_id=claim["id"]))
+    for rule in spec.get("rules", []):
+        if rule["status"] != "corroborated":
+            continue
+        for check in rule["checks"]:
+            if check["kind"] == "outcome":
+                tests.append(_Test(kind="rule", inputs=[check["a"]], expect=[check["expect"]], match="subset",
+                                   claim_id=rule["id"]))
+            else:
+                tests.append(_Test(kind="rule", inputs=[check["a"]], expect=[None], claim_id=rule["id"],
+                                   relation=check["kind"], other=[check["b"]], keys=check.get("keys")))
     return tests[:max_tests]
 
 
@@ -136,6 +149,9 @@ class Verifier:
         results: list[TestResult] = []
         try:
             for i, test in enumerate(tests):
+                if test.relation:
+                    results.append(self._judge_relation(i, test, original, clone, repeats))
+                    continue
                 runs = [[self.rename(o) for o in original.run(test.inputs, use_cache=False)[0]]
                         for _ in range(max(1, repeats))]
                 observed = clone.run(test.inputs, use_cache=False)[0]
@@ -159,6 +175,24 @@ class Verifier:
              "inconclusive": verdict.inconclusive, "repeats": repeats},
         )
         return verdict
+
+    def _judge_relation(self, i: int, test: _Test, original, clone, repeats: int) -> TestResult:
+        from teardown.engine.rules import projection
+
+        def relation_holds(session, rename) -> tuple[bool, str, str]:
+            a = rename(session.run(test.inputs, use_cache=False)[0][-1])
+            b = rename(session.run(test.other, use_cache=False)[0][-1])
+            equal = projection(a, test.keys) == projection(b, test.keys)
+            return (equal if test.relation == "same" else not equal), a, b
+
+        base = {"test": i, "kind": test.kind, "claim_id": test.claim_id, "inputs": [*test.inputs, *test.other]}
+        if not all(relation_holds(original, self.rename)[0] for _ in range(max(1, repeats))):
+            return TestResult(**base, status="inconclusive", note="relation no longer holds on the original")
+        holds, a, b = relation_holds(clone, lambda s: s)
+        if holds:
+            return TestResult(**base, status="pass")
+        return TestResult(**base, status="fail", expected=f"{test.relation} on {test.keys or 'all keys'}",
+                          observed=json.dumps({"a": a, "b": b}, ensure_ascii=False), note="relation violated")
 
     def _judge(self, i: int, test: _Test, runs: list[list[str]], observed: list[str], vocabulary: set[str],
                codename: str) -> TestResult:

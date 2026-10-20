@@ -131,3 +131,52 @@ def test_differential_gnu_vs_busybox(tmp_path):
     same = verifier.verify("cli:docker:debian:stable-slim", repeats=1)
     other = verifier.verify("cli:docker:busybox:musl", repeats=1)
     assert same.failed == 0 and other.failed > 0
+
+
+SORT_RULES = [
+    {"statement": "Input order does not affect the output.", "origin": "documented", "checks": [
+        {"kind": "same", "a": {"argv": ["sort"], "stdin": "b\na\nc\n"}, "b": {"argv": ["sort"], "stdin": "c\nb\na\n"}}]},
+    {"statement": "-r reverses the order.", "checks": [
+        {"kind": "differs", "a": {"argv": ["sort"], "stdin": "b\na\n"}, "b": {"argv": ["sort", "-r"], "stdin": "b\na\n"},
+         "keys": ["stdout"]}]},
+    {"statement": "A missing input file is refused with ENOENT.", "kind": "refusal", "checks": [
+        {"kind": "outcome", "a": {"argv": ["sort", "missing.txt"]}, "expect": {"diagnostic": True, "errno": "ENOENT"}}]},
+    {"statement": "Sorting is case-insensitive.", "origin": "documented", "checks": [  # false for sort in the C locale
+        {"kind": "same", "a": {"argv": ["sort"], "stdin": "a\nB\n", "env": {"LC_ALL": "C"}},
+         "b": {"argv": ["sort"], "stdin": "B\na\n", "env": {"LC_ALL": "C"}}, "keys": []},
+        {"kind": "outcome", "a": {"argv": ["sort"], "stdin": "a\nB\n", "env": {"LC_ALL": "C"}},
+         "expect": {"stdout": "a\nB\n"}}]},
+]
+
+
+def test_rules_are_checked_released_and_verified_as_relations(tmp_path):
+    project = Project(tmp_path / "p")
+    project.open_target("cli:local", purpose="research")
+    result = project.check_rules("sort", SORT_RULES, workers=1)
+    status = {r["statement"]: r["status"] for r in result["rules"]}
+    assert status["Input order does not affect the output."] == "corroborated"
+    assert status["-r reverses the order."] == "corroborated"
+    assert status["A missing input file is refused with ENOENT."] == "corroborated"
+    assert status["Sorting is case-insensitive."] == "contested"  # the keys=[] check holds trivially
+    conflicts = [u.identity.question for u in project.ledger.unknowns().values()]
+    assert any("documentation/behavior conflict" in q for q in conflicts)
+    rel = project.release_spec(project.compile_spec("sort").id)
+    assert len(rel.spec["rules"]) == 4 and rel.spec["actions"]
+    verdict = project.verifier().verify("cli:local", repeats=1)
+    assert verdict.failed == 0 and verdict.passed == 3  # one test per check of the 3 corroborated rules
+
+
+def test_input_mutations_and_coverage(tmp_path):
+    from teardown.drivers.cli.plan import mutations
+
+    muts = mutations("a\nb\nc\n", {"hash": "# x"})
+    assert muts["crlf"] == "a\r\nb\r\nc\r\n" and muts["hash@middle"] == "a\n# x\nb\nc\n"
+    assert muts["no_final_newline"] == "a\nb\nc"
+    project = Project(tmp_path / "p")
+    project.open_target("cli:local", purpose="research")
+    project.probe_cli("sort", {"cmd": "sort", "base": [], "default_input": "dups", "sweep_inputs": ["dups"],
+                               "inputs": ["dups"], "pair_inputs": [], "mutation_lines": {"hash": "# x"},
+                               "stdio_modes": False}, workers=2, env_sample=5, pairwise=False)
+    report = project.coverage("sort", {"reverse flag": ["-r"], "made-up feature": ["--frobnicate"]})
+    assert report["counts"]["reverse flag"] > 0 and "made-up feature" in report["uncovered"]
+    assert any("made-up feature" in u.identity.question for u in project.ledger.unknowns().values())

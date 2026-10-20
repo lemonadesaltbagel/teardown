@@ -97,6 +97,23 @@ def build_observe_server(project: Project) -> MCPServer:
         return project.probe_web_field(feature, prefix=prefix, role=role, name=name, submit=submit, kind=kind,
                                        classes=classes, valid=valid)
 
+    @server.tool(description="Check observer-authored rules against the original. Each rule: {statement (your own "
+                 "words), origin: documented|inferred-intent|observed, kind, checks: [{kind: outcome|same|differs, "
+                 "a: invocation, b: invocation (same/differs), expect: subset (outcome), keys: [..] (optional)}]}. "
+                 "Falsified documented rules are reported as documentation/behavior conflicts.")
+    def check_rules(feature: str, rules: list[dict[str, Any]]) -> dict[str, Any]:
+        return project.check_rules(feature, rules)
+
+    @server.tool(description="Coverage of a feature inventory {item: [patterns]} by probes and rule checks "
+                 "(options are added automatically). Uncovered items become unknowns.")
+    def coverage(feature: str, inventory: dict[str, list[str]] | None = None) -> dict[str, Any]:
+        return project.coverage(feature, inventory)
+
+    @server.tool(description="Register public documentation you read (dirty side). Its paragraphs join the gate "
+                 "corpus so copied wording is flagged; write rules in your own words.")
+    def ingest_docs(source: str, text: str) -> dict[str, Any]:
+        return {"paragraphs": project.ingest_docs(source, text)}
+
     @server.tool(description="Learn a state machine for a feature with KV or L# under an explicit oracle budget.")
     def learn_flow(
         feature: str, alphabet: list[str], algorithm: str = "kv", walks_per_state: int = 100, walk_len: int = 20
