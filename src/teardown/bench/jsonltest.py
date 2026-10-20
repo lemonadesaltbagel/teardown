@@ -53,7 +53,13 @@ def run(runner: Runner, command: str, cases: list[dict], *, rename: tuple[str, s
         stdout = _t(obs["stdout"])
         if rename:
             stdout = stdout.replace(rename[0], rename[1])
-        created = {c["path"]: _t(c.get("content")) for c in obs["fs"] if c["op"] in ("create", "modify")}
+        final = dict(case.get("files") or {})  # seeded files persist unless changed or deleted
+        for c in obs["fs"]:
+            if c["op"] == "delete":
+                final.pop(c["path"], None)
+            else:
+                final[c["path"]] = _t(c.get("content"))
+        created = final
         problems = []
         if obs["exit"] != case["expect_exit"]:
             problems.append(f"exit {obs['exit']} != {case['expect_exit']}")
