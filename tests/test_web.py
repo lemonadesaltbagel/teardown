@@ -147,6 +147,11 @@ def test_hang_fault_exposes_pending_state_until_release(site):
         assert done["alerts"] == ["Server error 502"] and done["controls"]["button:Load quotes"] == []
         again = web_aria(d.step(_act(op="click", role="button", name="Load quotes")), {})  # the hang is gone
         assert again["network"] == ["GET /quotes.json?page=1 200"]
+        d.reset()  # releasing with 'continue' lets the held call reach the server
+        d.step(_act(op="fault", fault={"path": "/quotes.json", "mode": "hang"}))
+        d.step(_act(op="click", role="button", name="Load quotes"))
+        done = web_aria(d.step(_act(op="fault", fault={"mode": "release", "then": "continue"})), {})
+        assert done["network"] == ["GET /quotes.json?page=1 200"] and "first" in done["text"]
     finally:
         d.close()
 

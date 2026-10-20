@@ -170,6 +170,7 @@ class WebDriver(Driver):
         self.contract = self._contract_list(contract_selectors)
         self._held: list[Any] = []
         self._hang_handlers: list[Any] = []
+        self._allowed: set[str] | None = None  # hosts the context gate lets through (None: no gate)
         self._ctx = None
         self.page = None
         self._inflight = 0
@@ -222,6 +223,7 @@ class WebDriver(Driver):
             # Third-party hosts (CDNs, analytics, fonts) are blocked: they make runs nondeterministic and would tell
             # outside services what is being observed. The target's own host and localhost stay reachable.
             allowed = {urlparse(self.url).hostname, "127.0.0.1", "localhost", *p.allow_hosts}
+            self._allowed = allowed
 
             def gate(route):
                 host = urlparse(route.request.url).hostname
@@ -369,7 +371,13 @@ class WebDriver(Driver):
         for route in held:
             try:
                 if then == "continue":
-                    route.fallback()
+                    # a held route is past its handler chain: fallback() would hand it to the context gate after
+                    # the fact, so continue it directly, applying the gate's host check here
+                    host = urlparse(route.request.url).hostname
+                    if self._allowed is None or host in self._allowed:
+                        route.continue_()
+                    else:
+                        route.abort()
                 elif then == "abort":
                     route.abort("failed")
                 elif then == "timeout":
