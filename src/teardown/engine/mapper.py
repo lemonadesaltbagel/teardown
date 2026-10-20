@@ -110,4 +110,5 @@ def symbol_matches(observed: str, expected: str | None, match: str = "exact") ->
     want, got = describe_symbol(expected), describe_symbol(observed)
     if not isinstance(want, dict) or not isinstance(got, dict):
         return observed == expected
-    return all(k in got and got[k] == v for k, v in want.items())
+    # an expected empty list also matches an absent key (abstractions omit empty collections)
+    return all((k in got and got[k] == v) or (k not in got and v == []) for k, v in want.items())

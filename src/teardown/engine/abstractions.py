@@ -166,3 +166,77 @@ def web_aria(observation: Any, params: dict[str, Any]) -> Any:
 
 
 BUILTINS["web.aria/v1"] = web_aria
+
+
+# -- desktop -----------------------------------------------------------------------------------------------------
+_DESK_VALUE_ROLES = {"text", "entry", "password text", "spin button", "combo box"}
+_DESK_CONTROL_ROLES = _DESK_VALUE_ROLES | {"push button", "toggle button", "check box", "radio button", "menu item",
+                                          "check menu item", "radio menu item", "link", "slider", "page tab"}
+
+
+def desktop_a11y(observation: Any, params: dict[str, Any]) -> Any:
+    """Structured view of an AT-SPI tree: window titles, dialogs, control states, visible text, list items."""
+    if not isinstance(observation, dict) or "tree" not in observation:
+        return observation
+    out: dict[str, Any] = {"windows": [], "controls": {}, "text": [], "items": []}
+    for n in observation["tree"]:
+        role, name, states = n["role"], n.get("name") or "", n.get("states", [])
+        if role in ("frame", "window", "dialog", "alert"):
+            out["windows"].append(f"{role}:{name}" + (":modal" if "modal" in states else ""))
+        elif role in _DESK_CONTROL_ROLES:
+            flags = sorted(s for s in states if s in ("checked", "selected", "expanded", "focused"))
+            if "sensitive" not in states and "enabled" not in states:
+                flags.append("disabled")
+            if role in _DESK_VALUE_ROLES:
+                flags.append("filled" if (n.get("text") or "").strip() else "empty")
+            out["controls"][f"{role}:{name}"] = sorted(flags)
+        elif role == "label" and name.strip():
+            out["text"].append(name.strip())
+        elif role in ("list item", "table cell") and name.strip():
+            out["items"].append(name.strip())
+    for key in ("text", "items"):
+        if not out[key]:
+            out.pop(key)
+    return out
+
+
+BUILTINS["desktop.a11y/v1"] = desktop_a11y
+
+
+# -- android -----------------------------------------------------------------------------------------------------
+_AND_CONTROL_ROLES = {"button", "textbox", "checkbox", "switch", "radio", "togglebutton", "combobox", "slider"}
+
+
+def android_a11y(observation: Any, params: dict[str, Any]) -> Any:
+    """Structured view of an Android accessibility dump: controls (role:name -> flags), visible text, dialogs."""
+    if not isinstance(observation, dict) or "nodes" not in observation:
+        return observation
+    out: dict[str, Any] = {"controls": {}, "text": []}
+    for n in observation["nodes"]:
+        role, name = n["role"], (n.get("desc") or n.get("text") or "").strip()
+        if n.get("package") == "android":  # system UI (permission dialogs, ANR/crash dialogs) is behavior too
+            out.setdefault("system", []).append(f"{role}:{name}")
+            continue
+        if role in _AND_CONTROL_ROLES:
+            label = (n.get("desc") or "").strip() if role == "textbox" else name
+            flags = [f for f in ("checked", "selected", "focused") if n.get(f)]
+            if not n.get("enabled", True):
+                flags.append("disabled")
+            if role == "textbox":
+                # uiautomator reports an empty field's hint as its text; the hint usually equals the field's
+                # content description, so text == description counts as empty (heuristic, see driver docs).
+                text = (n.get("text") or "").strip()
+                if n.get("showing_hint") is not None:  # on-device agent: exact
+                    empty = n["showing_hint"] or not text
+                else:
+                    empty = not text or text == (n.get("desc") or "").strip()
+                flags.append("empty" if empty else "filled")
+            out["controls"][f"{role}:{label}"] = sorted(flags)
+        elif role == "text" and name:
+            out["text"].append(name)
+    if not out["text"]:
+        out.pop("text")
+    return out
+
+
+BUILTINS["android.a11y/v1"] = android_a11y

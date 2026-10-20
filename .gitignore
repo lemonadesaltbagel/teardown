@@ -25,3 +25,9 @@ spikes/**/*.tgz
 # captured third-party target content stays local
 spikes/desktop-ax/*.json
 bench/jq/hidden/
+
+# android example build outputs and debug keys
+src/teardown/examples/android*/build/
+src/teardown/examples/android*/debug.keystore
+deploy/android-agent/build/
+deploy/android-agent/debug.keystore

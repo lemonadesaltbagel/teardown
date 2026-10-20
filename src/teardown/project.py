@@ -112,7 +112,17 @@ def open_driver(target_spec: str, actions: dict[str, dict[str, Any]] | None = No
 
         return WebDriver(target_spec, actions={k: WebAction.model_validate(v) for k, v in (actions or {}).items()},
                          reset_command=options.get("reset_command"), reset_check_url=options.get("reset_check_url"))
-    raise ValueError(f"no driver for {target_spec!r} (fake:, cli: and web: are available)")
+    if target_spec.startswith("desktop:"):
+        from teardown.drivers.desktop.driver import DesktopAction, DesktopDriver
+
+        return DesktopDriver(target_spec, {k: DesktopAction.model_validate(v) for k, v in (actions or {}).items()},
+                             options)
+    if target_spec.startswith("android:"):
+        from teardown.drivers.android.driver import AndroidAction, AndroidDriver
+
+        return AndroidDriver(target_spec, {k: AndroidAction.model_validate(v) for k, v in (actions or {}).items()},
+                             options)
+    raise ValueError(f"no driver for {target_spec!r} (fake:, cli:, web:, desktop: and android: are available)")
 
 
 def default_mapper(target_spec: str, target: str) -> MapperVersion:
@@ -120,6 +130,10 @@ def default_mapper(target_spec: str, target: str) -> MapperVersion:
         return MapperVersion(target=target, builtin="cli.behavior/v1", note="CLI behavior-level abstraction")
     if target_spec.startswith("web:"):
         return MapperVersion(target=target, builtin="web.aria/v1", note="structured accessibility snapshot")
+    if target_spec.startswith("desktop:"):
+        return MapperVersion(target=target, builtin="desktop.a11y/v1", note="structured AT-SPI snapshot")
+    if target_spec.startswith("android:"):
+        return MapperVersion(target=target, builtin="android.a11y/v1", note="structured accessibility dump")
     return MapperVersion(target=target, note="identity mapper (no rules yet)")
 
 
@@ -241,6 +255,10 @@ class Project:
     def define_actions(self, actions: dict[str, dict[str, Any]]) -> None:
         if self.state.target_spec.startswith("web:"):
             from teardown.drivers.web.driver import WebAction as Model
+        elif self.state.target_spec.startswith("desktop:"):
+            from teardown.drivers.desktop.driver import DesktopAction as Model
+        elif self.state.target_spec.startswith("android:"):
+            from teardown.drivers.android.driver import AndroidAction as Model
         else:
             from teardown.drivers.cli.invocation import Invocation as Model
 
@@ -407,7 +425,10 @@ class Project:
     def max_workers(self, requested: int) -> int:
         """Episodes may only run in parallel when each one has isolated state. A shared self-hosted backend (a
         `reset_command` target) is one state: parallel workers would reset each other mid-episode."""
-        return 1 if self.state.target_options.get("reset_command") else requested
+        state = self.state
+        if state.target_options.get("reset_command") or state.target_spec.startswith("android:"):
+            return 1  # one shared backend / one device: episodes must not overlap
+        return requested
 
     def _worker_session(self) -> ObservationSession:
         state = self.state
@@ -641,6 +662,10 @@ class Project:
                                              for r in records]}
 
     # -- web field probing -------------------------------------------------------------------------------------
+    def probe_ui_field(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Field probing for any UI target (web, android, desktop)."""
+        return self.probe_web_field(*args, **kwargs)
+
     def probe_web_field(self, feature: str, *, prefix: list[str], role: str, name: str, submit: str,
                         kind: str = "text", classes: dict[str, str] | None = None, valid: str | None = None,
                         boundary: bool = True, workers: int = 4) -> dict[str, Any]:
@@ -655,8 +680,14 @@ class Project:
         values = dict(classes or fp.CLASSES.get(kind, fp.TEXT))
         valid = valid or ("valid" if "valid" in values else "typical" if "typical" in values else None)
 
+        platform = self.state.target_spec.split(":", 1)[0]
+
         def fill_action(cls: str, value: str) -> tuple[str, dict[str, Any]]:
-            return f"fill[{name}]={cls}", {"op": "fill", "role": role, "name": name, "value": value}
+            if platform == "web":
+                spec = {"op": "fill", "role": role, "name": name, "value": value}
+            else:  # android / desktop action shape
+                spec = {"action": "fill", "role": role, "name": name, "value": value}
+            return f"fill[{name}]={cls}", spec
 
         actions = dict(fill_action(c, v) for c, v in values.items())
         self.define_actions(actions)

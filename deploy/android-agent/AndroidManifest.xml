@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.teardown.agent">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application android:label="Teardown agent" android:debuggable="true" />
+    <instrumentation android:name=".Agent" android:targetPackage="dev.teardown.agent" />
+</manifest>
