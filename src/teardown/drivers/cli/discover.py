@@ -84,7 +84,15 @@ def parse_help(text: str, cmd: str) -> dict:
             continue
         aliases = []
         for part in re.split(r",\s+", spec):
-            m = _ALIAS.match(part.strip())
+            part = part.strip()
+            m = _ALIAS.match(part)
+            if not m:
+                # One space before the description ("--derive NAME=EXPR set field ..."): keep the name and, if it
+                # looks like one, the metavar (uppercase, <angle>, [opt] or KEY=VALUE).
+                toks = part.split(" ")
+                metavar = len(toks) > 1 and re.match(r"^(?:<|\[|[A-Z][A-Z0-9_]*(?:=|$))", toks[1])
+                keep = toks[:2] if metavar else toks[:1]
+                m = _ALIAS.match(" ".join(keep))
             if not m:
                 continue
             mv = m.group("m1") or m.group("m2") or m.group("m3") or m.group("m4")
@@ -237,6 +245,11 @@ def discover(execute: Execute, cmd: str, takes_files: bool = True) -> dict:
     for o in model["options"].values():
         shorts = [n for n in o["names"] if re.fullmatch(r"-\w", n)]
         o["phantom"] = bool(shorts) and all(n in findings["documented_but_unknown"] for n in shorts)
+    for o in model["options"].values():  # help says flag, behavior says it needs a value
+        shorts = [n for n in o["names"] if re.fullmatch(r"-\w", n)]
+        if o["arity"] == "none" and shorts and all(scan.get(n, {}).get("accepted") is False for n in shorts):
+            o.update(arity="required", type="string", arity_from_behavior=True)
+            findings["arity_mismatch"].append({"opt": shorts[0], "help_arity": "none", "behavior": "refused alone"})
     for name in findings["undocumented_but_accepted"]:
         e = scan[name]
         model["options"][name] = {"names": [name], "arity": "required" if e.get("consumes_next") else "none",

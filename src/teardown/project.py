@@ -49,6 +49,18 @@ class DiscoveryRecord(ContentAddressed):
     data: dict[str, Any]
 
 
+def _drop_masked_text(check):
+    """A folded claim covers several typed values; drop outcome lists that only match with the echo masked."""
+    expect = []
+    for e in check.expect:
+        if e is not None and "<input>" in e:
+            data = json.loads(e)
+            data = {k: v for k, v in data.items() if not (isinstance(v, list) and any("<input>" in str(x) for x in v))}
+            e = json.dumps(data, sort_keys=True, ensure_ascii=False)
+        expect.append(e)
+    return check.model_copy(update={"expect": expect})
+
+
 def _flatten(value: Any):
     if isinstance(value, dict):
         for k, v in value.items():
@@ -61,7 +73,9 @@ def _flatten(value: Any):
         yield value
 
 
-def open_driver(target_spec: str, actions: dict[str, dict[str, Any]] | None = None) -> Driver:
+def open_driver(target_spec: str, actions: dict[str, dict[str, Any]] | None = None,
+                options: dict[str, Any] | None = None) -> Driver:
+    options = options or {}
     if target_spec.startswith("fake:"):
         return open_fake(target_spec)
     if target_spec.startswith("cli:"):
@@ -73,7 +87,8 @@ def open_driver(target_spec: str, actions: dict[str, dict[str, Any]] | None = No
     if target_spec.startswith("web:"):
         from teardown.drivers.web.driver import WebAction, WebDriver
 
-        return WebDriver(target_spec, actions={k: WebAction.model_validate(v) for k, v in (actions or {}).items()})
+        return WebDriver(target_spec, actions={k: WebAction.model_validate(v) for k, v in (actions or {}).items()},
+                         reset_command=options.get("reset_command"), reset_check_url=options.get("reset_check_url"))
     raise ValueError(f"no driver for {target_spec!r} (fake:, cli: and web: are available)")
 
 
@@ -96,6 +111,8 @@ class ProjectState(BaseModel):
     models: dict[str, str] = Field(default_factory=dict, description="feature -> latest model record id")
     probes: dict[str, str] = Field(default_factory=dict, description="feature -> latest probe table id")
     actions: dict[str, dict[str, Any]] = Field(default_factory=dict, description="named actions (invocations)")
+    target_options: dict[str, Any] = Field(default_factory=dict,
+                                           description="driver options, e.g. reset_command, reset_check_url")
 
 
 class Project:
@@ -129,8 +146,9 @@ class Project:
         max_actions_per_second: float | None = None,
         strict: bool = False,
         real_names: list[str] | None = None,
+        target_options: dict[str, Any] | None = None,
     ) -> tuple[Intake, list[str]]:
-        driver = open_driver(target_spec)
+        driver = open_driver(target_spec, None, target_options)
         target = driver.target_fingerprint()
         intake = Intake(
             target=target,
@@ -151,7 +169,8 @@ class Project:
             denylist=sorted(set(real_names or [])),
         )
         self.root.mkdir(parents=True, exist_ok=True)
-        self._save(ProjectState(target_spec=target_spec, target=target, intake=intake.id, mapper=mapper.id, gate=gate))
+        self._save(ProjectState(target_spec=target_spec, target=target, intake=intake.id, mapper=mapper.id, gate=gate,
+                                target_options=dict(target_options or {})))
         notes = warnings_for(intake)
         self.audit.append(
             "intake",
@@ -212,7 +231,7 @@ class Project:
             intake = self.workspace.get(state.intake, Intake)
             self._session = ObservationSession(
                 self.workspace,
-                open_driver(state.target_spec, self.action_table()),
+                open_driver(state.target_spec, self.action_table(), state.target_options),
                 self.mapper(),
                 max_actions_per_second=intake.max_actions_per_second,
             )
@@ -307,9 +326,15 @@ class Project:
         self.audit.append("quote-approved", {}, {"compat_reason": compat_reason, "approved_by": approved_by})
 
     # -- CLI probing -------------------------------------------------------------------------------------------
+    def max_workers(self, requested: int) -> int:
+        """Episodes may only run in parallel when each one has isolated state. A shared self-hosted backend (a
+        `reset_command` target) is one state: parallel workers would reset each other mid-episode."""
+        return 1 if self.state.target_options.get("reset_command") else requested
+
     def _worker_session(self) -> ObservationSession:
         state = self.state
-        return ObservationSession(self.workspace, open_driver(state.target_spec, self.action_table()), self.mapper())
+        driver = open_driver(state.target_spec, self.action_table(), state.target_options)
+        return ObservationSession(self.workspace, driver, self.mapper())
 
     def _execute_raw(self, probes: list) -> list[dict[str, Any]]:
         from teardown.engine.probing import run_probes
@@ -338,11 +363,12 @@ class Project:
         from teardown.engine.probing import run_probes
 
         h = ProbeHints.model_validate(hints)
+        workers = self.max_workers(workers)
         found = discovery or self.discover_cli(h.cmd, takes_files=h.takes_files)
         model = found["model"]
         sweep = plan_sweep(model, h)
         results = run_probes(self._worker_session, sweep, workers=workers)
-        accepted = accepted_classes(sweep, [describe_symbol(r.symbol) for r in results])
+        accepted = accepted_classes(sweep, [describe_symbol(r.symbol) for r in results], h.default_input)
         probes = list(sweep)
         if pairwise:
             extra = [p for p in plan_pairwise(model, h, accepted) if p.id not in {q.id for q in probes}]
@@ -400,6 +426,7 @@ class Project:
         from teardown.engine import fieldprobe as fp
         from teardown.engine.mining import mine
 
+        workers = self.max_workers(workers)
         values = dict(classes or fp.CLASSES.get(kind, fp.TEXT))
         valid = valid or ("valid" if "valid" in values else "typical" if "typical" in values else None)
 
@@ -437,11 +464,22 @@ class Project:
                                    tags=["s:field", f"field:{name}", f"val:{kind}.{cls}"]) for cls in values]
         first = fp.run_sequences(self._worker_session, probes, workers=workers)
         second = {r.probe.id: r.symbol for r in fp.run_sequences(self._worker_session, probes, workers=workers)}
-        nondet = {r.probe.id for r in first if fp.outcome_json(r.symbol) != fp.outcome_json(second[r.probe.id])}
+        typed = {p.id: values[p.id.rsplit("=", 1)[1]] for p in probes}
+
+        def outcome_of(result) -> dict[str, Any]:
+            return fp.outcome(describe_symbol(result.symbol), typed[result.probe.id])
+
+        nondet = {r.probe.id for r in first if fp.outcome_json(r.symbol, typed[r.probe.id])
+                  != fp.outcome_json(second[r.probe.id], typed[r.probe.id])}
+        # Rows keep the literal outcome (the typed value is part of the row, so its echo is reproducible); mining
+        # and acceptance compare echo-masked outcomes.
+        literal = {r.probe.id: fp.outcome_json(r.symbol) for r in first}
+        for r in first:
+            r.symbol = json.dumps(outcome_of(r), sort_keys=True, ensure_ascii=False)
         table = ProbeTable(
             feature=feature, target=self.state.target, mapper=self.state.mapper,
             actions={k: v for k, v in self.action_table().items() if k in {*prefix, submit, *actions}},
-            rows=[ProbeRow(action=submit, prefix=r.probe.inputs[:-1], expect=fp.outcome_json(r.symbol),
+            rows=[ProbeRow(action=submit, prefix=r.probe.inputs[:-1], expect=literal[r.probe.id],
                            tags=r.probe.tags, match="subset") for r in first if r.probe.id not in nondet],
             excluded={pid: "nondeterministic" for pid in sorted(nondet)},
         )
@@ -454,9 +492,14 @@ class Project:
                                mixed=old.mixed)
         self.workspace.put(table)
         self._save(self.state.model_copy(update={"probes": {**self.state.probes, feature: table.id}}))
-        mined, mixed = mine(feature, "the form", first, exclude=nondet, outcome=fp.outcome, describe=fp.describe)
+        reference_outcome = next((describe_symbol(r.symbol) for r in first
+                                  if r.probe.id.endswith(f"={valid}")), None) if valid else None
+        is_refused, describe = fp.judge(reference_outcome)
+        mined, mixed = mine(feature, "the form", first, exclude=nondet, outcome=fp.outcome, describe=describe,
+                            refused=is_refused)
         for m in mined:
-            head, *rest = m.checks
+            checks = [_drop_masked_text(c) for c in m.checks]
+            head, *rest = checks
             claim = self.propose_claim(feature=feature, kind=m.kind, statement=m.statement, inputs=head.inputs,
                                        expect=head.expect, match="subset", cases=rest)
             self.ledger.record_batch(claim.id, 2 * len(m.checks), [])
@@ -476,7 +519,9 @@ class Project:
     # -- clean-side channels -----------------------------------------------------------------------------------
     def verifier(self) -> Verifier:
         def open_original(rel: SpecRelease) -> ObservationSession:
-            return ObservationSession(self.workspace, open_driver(self.state.target_spec, self.action_table()),
+            state = self.state
+            return ObservationSession(self.workspace,
+                                      open_driver(state.target_spec, self.action_table(), state.target_options),
                                       self.mapper())
 
         def open_clone(clone_target: str, rel: SpecRelease, adapter: dict[str, Any] | None) -> ObservationSession:

@@ -41,6 +41,12 @@ def main(argv: list[str] | None = None) -> int:
     bench.add_argument("--tag", default="jq-1.7.1")
     bench.add_argument("--suite", type=Path, default=Path("bench/jq/hidden/jq.test"))
 
+    bj = sub.add_parser("bench-jsonl", help="score an implementation on a hidden JSONL CLI suite")
+    bj.add_argument("--image", required=True)
+    bj.add_argument("--cmd", required=True, help="command name inside the image")
+    bj.add_argument("--suite", required=True, type=Path)
+    bj.add_argument("--rename", nargs=2, metavar=("FROM", "TO"), help="map the clone's command name in its output")
+
     audit = sub.add_parser("audit-verify", help="verify a project's audit hash chain")
     audit.add_argument("--project", required=True, type=Path)
 
@@ -106,6 +112,20 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"suite": args.tag, "cases": len(cases), "denominator": len(pinned),
                           "reference_passed": reference.passed, "passed": report.passed,
                           "rate": round(report.rate, 4), "first_failures": report.failures[:15]}, indent=1))
+    elif args.command == "bench-jsonl":
+        import collections
+        import json
+
+        from teardown.bench import jsonltest
+        from teardown.drivers.cli.runner import ContainerRunner
+
+        runner = ContainerRunner(args.image)
+        report = jsonltest.run(runner, args.cmd, jsonltest.load(args.suite),
+                               rename=tuple(args.rename) if args.rename else None)
+        runner.close()
+        kinds = collections.Counter(p.split(" ")[0] for f in report.failures for p in f["problems"])
+        print(json.dumps({"passed": report.passed, "total": report.total, "rate": round(report.rate, 4),
+                          "failure_kinds": kinds, "failed_ids": [f["id"] for f in report.failures]}, indent=1))
     elif args.command == "audit-verify":
         from teardown.audit.log import AuditLog
 

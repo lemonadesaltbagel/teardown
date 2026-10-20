@@ -37,7 +37,8 @@ def _factor(tags: list[str]) -> tuple[str, str] | None:
     tag = {t.split(":", 1)[0]: t.split(":", 1)[1] for t in tags if ":" in t}
     strategy = tag.get("s")
     if strategy == "sweep" and "opt" in tag:
-        return f"option {tag['opt']}", tag.get("val", "flag")
+        on = f" on input {tag['in']}" if tag.get("in") else ""
+        return f"option {tag['opt']}{on}", tag.get("val", "flag")
     if strategy == "inputs":
         if "in" in tag and tag.get("mode") in ("stdin", "file"):
             return f"input via {tag['mode']}", tag["in"]
@@ -52,6 +53,8 @@ def _factor(tags: list[str]) -> tuple[str, str] | None:
         return f"operand {position} (form {tag.get('form', '?')}){opts}{on}", cls
     if strategy == "field" and "field" in tag:
         return f"field {tag['field']}", tag.get("val", "?")
+    if strategy == "designed" and "case" in tag:
+        return "designed case", tag["case"]
     if strategy == "stdio" and "stdio" in tag:
         return "stdio mode", tag["stdio"]
     if strategy == "env" and "env" in tag:
@@ -71,7 +74,8 @@ def _describe(outcome: dict[str, Any]) -> str:
 
 def mine(feature: str, cmd: str, results: list[ProbeResult], *, exclude: set[str] | None = None,
          min_probes: int = 1, outcome: Callable[[Any], dict[str, Any]] = outcome_class,
-         describe: Callable[[dict[str, Any]], str] | None = None) -> tuple[list[MinedClaim], list[dict[str, Any]]]:
+         describe: Callable[[dict[str, Any]], str] | None = None,
+         refused: Callable[[dict[str, Any]], bool] | None = None) -> tuple[list[MinedClaim], list[dict[str, Any]]]:
     """Return (claims, mixed) where ``mixed`` lists factor classes whose probes disagree.
 
     ``results`` items need ``.probe.id``, ``.probe.tags``, ``.symbol`` and optionally ``.probe.inputs`` (the action
@@ -101,11 +105,13 @@ def mine(feature: str, cmd: str, results: list[ProbeResult], *, exclude: set[str
             if len(rows) < min_probes:
                 continue
             # CLI outcomes refuse by exit status; UI outcomes refuse by showing alerts or invalid controls.
-            if "exit" in result:
-                refused = result.get("exit") != 0
+            if refused is not None:
+                is_refused = refused(result)
+            elif "exit" in result:
+                is_refused = result.get("exit") != 0
             else:
-                refused = bool(result.get("alerts") or result.get("invalid"))
-            kind = ClaimKind.REFUSAL if refused else ClaimKind.INPUT_DOMAIN
+                is_refused = bool(result.get("alerts") or result.get("invalid"))
+            kind = ClaimKind.REFUSAL if is_refused else ClaimKind.INPUT_DOMAIN
             shown = ", ".join(cls_list[:12]) + (f" (+{len(cls_list) - 12} more)" if len(cls_list) > 12 else "")
             statement = f"For {factor} with class {{{shown}}}, `{cmd}` {describe(result)}."
             checks = []

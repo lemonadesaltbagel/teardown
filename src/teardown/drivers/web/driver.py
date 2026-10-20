@@ -17,7 +17,10 @@ from __future__ import annotations
 import functools
 import http.server
 import re
+import subprocess
 import threading
+import time
+import urllib.request
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -83,18 +86,34 @@ class Profile(BaseModel):
     seed_random: bool = True
     block_service_workers: bool = True
     action_timeout_ms: int = 2000
-    settle: Literal["none", "stable"] = "none"
+    navigation_timeout_ms: int = 15000
+    settle: Literal["none", "stable", "network"] = "network"
+    settle_timeout_ms: int = 3000
+
+
+class ResetFailed(RuntimeError):
+    pass
 
 
 class WebDriver(Driver):
+    """``reset_command`` (argv) restores self-hosted backend state before every episode (e.g. copy a pristine
+    database file into place). ``reset_check_url`` is fetched after each reset; if its response differs from the
+    first one, state leaked between episodes and the reset is refused rather than silently trusted."""
+
     name = "web"
 
-    def __init__(self, target_spec: str, actions: dict[str, WebAction] | None = None, profile: Profile | None = None):
+    def __init__(self, target_spec: str, actions: dict[str, WebAction] | None = None, profile: Profile | None = None,
+                 reset_command: list[str] | None = None, reset_check_url: str | None = None):
         self.url = target_spec.removeprefix("web:")
         self.table = dict(actions or {})
         self.profile = profile or Profile()
+        self.reset_command = list(reset_command or [])
+        self.reset_check_url = reset_check_url
+        self._baseline: bytes | None = None
         self._ctx = None
         self.page = None
+        self._inflight = 0
+        self._requests_since_observe = 0
 
     def target_fingerprint(self) -> str:
         return content_id("tgt", {"platform": "web", "url": self.url, "profile": self.profile.model_dump()})
@@ -102,7 +121,19 @@ class WebDriver(Driver):
     def capabilities(self) -> DriverCapabilities:
         return DriverCapabilities(platform="web", reset_cost_ms=50.0, soft_reset=True, parallelism=8)
 
+    def _reset_backend(self) -> None:
+        if self.reset_command:
+            subprocess.run(self.reset_command, check=True, capture_output=True, timeout=60)
+        if self.reset_check_url:
+            with urllib.request.urlopen(self.reset_check_url, timeout=10) as resp:  # noqa: S310 - target's own URL
+                body = resp.read()
+            if self._baseline is None:
+                self._baseline = body
+            elif body != self._baseline:
+                raise ResetFailed(f"reset check failed: {self.reset_check_url} differs from its post-reset baseline")
+
     def reset(self) -> Any:
+        self._reset_backend()
         if self._ctx is not None:
             self._ctx.close()
         p = self.profile
@@ -112,9 +143,23 @@ class WebDriver(Driver):
             service_workers="block" if p.block_service_workers else "allow",
         )
         self._ctx.set_default_timeout(p.action_timeout_ms)
+        self._ctx.set_default_navigation_timeout(p.navigation_timeout_ms)
         if p.seed_random:
             self._ctx.add_init_script(_SEED_RANDOM)
         self.page = self._ctx.new_page()
+        self._inflight = 0
+        self._requests_since_observe = 1  # the initial navigation always settles
+
+        def started(_request):
+            self._inflight += 1
+            self._requests_since_observe += 1
+
+        def ended(_request):
+            self._inflight = max(0, self._inflight - 1)
+
+        self.page.on("request", started)
+        self.page.on("requestfinished", ended)
+        self.page.on("requestfailed", ended)
         self.page.goto(self.url, wait_until="load")
         return self.observe()
 
@@ -162,11 +207,26 @@ class WebDriver(Driver):
             loc.press(a.value or "Enter")
         return "ok"
 
+    def _settle(self) -> None:
+        """'network': wait (bounded) until no request is in flight for two consecutive 10 ms polls, then for two
+        equal snapshots. Costs ~nothing on pages without traffic; needed for SPAs whose state arrives async."""
+        if self.profile.settle != "network":
+            return
+        deadline, quiet = time.monotonic() + self.profile.settle_timeout_ms / 1000, 0
+        while time.monotonic() < deadline and quiet < 2:
+            self.page.wait_for_timeout(10)
+            quiet = quiet + 1 if self._inflight == 0 else 0
+
     def observe(self) -> Any:
         if self.page is None:
             return self.reset()
+        # 'network' settles only when the last action caused requests; a synchronous DOM update needs no wait.
+        waiting = self.profile.settle == "stable" or (self.profile.settle == "network" and self._requests_since_observe)
+        if waiting:
+            self._settle()
+        self._requests_since_observe = 0
         snap = self.page.locator("body").aria_snapshot()
-        if self.profile.settle == "stable":
+        if waiting:
             for _ in range(20):
                 self.page.wait_for_timeout(25)
                 again = self.page.locator("body").aria_snapshot()
@@ -189,16 +249,26 @@ class WebDriver(Driver):
 
 
 class _QuietHandler(http.server.SimpleHTTPRequestHandler):
+    spa = False
+
     def log_message(self, *args):
         pass
+
+    def send_head(self):
+        if self.spa:
+            target = Path(self.translate_path(self.path))
+            if not target.exists() and "." not in Path(urlparse(self.path).path).name:
+                self.path = "/index.html"  # single-page app: unknown routes are client-side
+        return super().send_head()
 
 
 class LocalSite:
     """Serve a directory on 127.0.0.1 (for examples, tests and self-hosted static targets)."""
 
-    def __init__(self, root: str | Path):
-        handler = functools.partial(_QuietHandler, directory=str(root))
-        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    def __init__(self, root: str | Path, *, spa: bool = False, port: int = 0):
+        handler_cls = type("Handler", (_QuietHandler,), {"spa": spa})
+        handler = functools.partial(handler_cls, directory=str(root))
+        self.httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
     def url(self, name: str = "") -> str:

@@ -130,15 +130,21 @@ class ProbeHints(BaseModel):
     operand_options: list[list[str]] = Field(default_factory=lambda: [[]],
                                              description="Option prefixes the operand sweep is repeated with.")
     stdio_modes: bool = Field(default=True, description="Probe closed/full stdout and closed stdin.")
+    extra_argv: dict[str, list[str]] = Field(
+        default_factory=dict, description="Observer-designed probes: class name -> argv (run on default_input).")
     unicode_argv: list[list[str]] = Field(default_factory=list)
     skip_options: list[str] = Field(default_factory=list)
     extra_inputs: dict[str, str] = Field(default_factory=dict, description="Observer-supplied input samples.")
     extra_values: dict[str, dict[str, str]] = Field(default_factory=dict, description="type -> class -> value")
+    option_values: dict[str, dict[str, str]] = Field(
+        default_factory=dict, description="option name -> class -> value; overrides the type-based classes")
 
     def input(self, name: str) -> str:
         return self.extra_inputs.get(name, INPUTS.get(name, ""))
 
-    def values(self, type_: str) -> dict[str, str]:
+    def values(self, type_: str, option: str | None = None) -> dict[str, str]:
+        if option and option in self.option_values:
+            return dict(self.option_values[option])
         return {**VALUES.get(type_, VALUES["string"]), **self.extra_values.get(type_, {})}
 
 
@@ -201,7 +207,7 @@ def plan_sweep(model: dict, hints: ProbeHints) -> list[Probe]:
                 a, i, f = _deliver(_with_base([p["name"]], p["name"], hints), data, "stdin")
                 ps.add(a, i, f, tags=["s:sweep", f"opt:{p['name']}", "val:flag", *itag])
                 continue
-            for vname, v in hints.values(p["type"]).items():
+            for vname, v in hints.values(p["type"], p["name"]).items():
                 styles = ("sep", "attached") if vname in ("empty", "zero", "neg", "open_start") else ("sep",)
                 for style in styles:
                     argv = [p["name"], v] if style == "sep" else [p["name"] + v]
@@ -256,6 +262,10 @@ def plan_sweep(model: dict, hints: ProbeHints) -> list[Probe]:
         if kind == "opt_after_operand":
             ps.add(argv, stdin, files, env={"POSIXLY_CORRECT": "1"}, tags=["s:syntax", f"syn:{kind}", "env:posix"])
 
+    for cname, argv in hints.extra_argv.items():  # S7: observer-designed probes (orderings, combinations, ...)
+        files = {"in.txt": din, "in2.txt": din} if din is not None and any(a.startswith("in") for a in argv) else {}
+        ps.add(list(argv), None if files else din, files, tags=["s:designed", f"case:{cname}"])
+
     if hints.stdio_modes:  # S6: stdio edge modes on the main invocation
         for mode, kwargs in (("stdout:closed", {"stdout_mode": "closed"}), ("stdout:full", {"stdout_mode": "full"}),
                              ("stdin:closed", {"stdin_mode": "closed"})):
@@ -273,12 +283,17 @@ def plan_sweep(model: dict, hints: ProbeHints) -> list[Probe]:
     return ps.probes
 
 
-def accepted_classes(probes: list[Probe], symbols: list[dict]) -> dict[str, list[str]]:
-    """From sweep results: option -> value classes that exited 0 on every probe of that class."""
+def accepted_classes(probes: list[Probe], symbols: list[dict],
+                     default_input: str | None = None) -> dict[str, list[str]]:
+    """From sweep results: option -> value classes that exited 0 on every probe of that class (only probes on
+    ``default_input`` count when given: other inputs may lack the fields an expression refers to)."""
     seen: dict[tuple[str, str], list[bool]] = {}
     for probe, sym in zip(probes, symbols, strict=True):
         opt = next((t[4:] for t in probe.tags if t.startswith("opt:")), None)
         val = next((t[4:] for t in probe.tags if t.startswith("val:")), None)
+        inp = next((t[3:] for t in probe.tags if t.startswith("in:")), None)
+        if default_input and inp not in (None, default_input):
+            continue
         if opt and val and "s:sweep" in probe.tags:
             seen.setdefault((opt, val), []).append(isinstance(sym, dict) and sym.get("exit") == 0)
     out: dict[str, list[str]] = {}
@@ -328,7 +343,7 @@ def plan_pairwise(model: dict, hints: ProbeHints, accepted: dict[str, list[str]]
                 grid[p["name"]] = [None, ("flag", None)]
             continue
         classes = [c for c in accepted.get(p["name"], []) if c != "flag"][:max_classes]
-        values = hints.values(p["type"])
+        values = hints.values(p["type"], p["name"])
         if classes:
             grid[p["name"]] = [None] + [(c, values[c.split(".", 1)[1]]) for c in classes
                                         if c.split(".", 1)[1] in values]

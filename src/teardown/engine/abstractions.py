@@ -146,7 +146,7 @@ def web_aria(observation: Any, params: dict[str, Any]) -> Any:
             out["headings"].append(n["name"] or n["text"] or "")
         elif role == "alert":
             out["alerts"].append(n["name"] or n["text"] or "")
-        elif role in ("paragraph", "text", "strong", "emphasis") and (n["text"] or "").strip():
+        elif role in ("paragraph", "text", "strong", "emphasis", "listitem") and (n["text"] or "").strip():
             out["text"].append(n["text"].strip())
         elif role in _CONTROL_ROLES:
             flags = sorted(a for a in n["attrs"] if a in ("checked", "disabled", "expanded", "pressed", "selected"))

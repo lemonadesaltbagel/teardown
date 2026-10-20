@@ -39,24 +39,60 @@ NUMBER = {"empty": "", "zero": "0", "one": "1", "negative": "-1", "decimal": "1.
           "text": "abc", "exponent": "1e3", "padded": " 7 "}
 CLASSES = {"text": TEXT, "email": EMAIL, "password": PASSWORD, "number": NUMBER}
 
-OUTCOME_KEYS = ("path", "headings", "alerts", "invalid")
+OUTCOME_KEYS = ("path", "headings", "alerts", "invalid", "text")
 
 
-def outcome(symbol: Any) -> dict[str, Any]:
-    """Acceptance-deciding part of a web.aria symbol (keys absent from the symbol stay absent)."""
+def outcome(symbol: Any, echo: str | None = None) -> dict[str, Any]:
+    """Acceptance-deciding part of a web.aria symbol (keys absent from the symbol stay absent).
+
+    ``echo`` is the value the probe typed: where the page shows it back (a greeting, a profile link), it is replaced
+    by ``<input>`` so that echoing the input is not mistaken for a different outcome.
+    """
     if not isinstance(symbol, dict):
         return {"value": symbol}
     out = {k: symbol[k] for k in OUTCOME_KEYS if k in symbol}
+    if echo and echo.strip():
+        needle = echo.strip()
+        out = {k: [x.replace(needle, "<input>") if isinstance(x, str) else x for x in v] if isinstance(v, list) else v
+               for k, v in out.items()}
     if "alerts" not in out:
         out["alerts"] = []  # absence of alerts is part of the outcome; web.aria omits the key when empty
     return out
 
 
+def judge(reference: dict[str, Any] | None):
+    """(refused, describe) for one field: accepted means 'same outcome as the known-good value'."""
+
+    def refused(result: dict[str, Any]) -> bool:
+        if result.get("value") in ("DISABLED", "NA"):
+            return True
+        if reference is not None:
+            return result != reference
+        return bool(result.get("alerts") or result.get("invalid"))
+
+    def describe(result: dict[str, Any]) -> str:
+        if result.get("value") == "DISABLED":
+            return "is refused before submission (submit is disabled)"
+        if result.get("value") == "NA":
+            return "is refused before submission (submit is not offered)"
+        if not refused(result):
+            return "is accepted (same outcome as the known-good value)"
+        detail = []
+        if result.get("alerts"):
+            detail.append(f"{len(result['alerts'])} alert(s)")
+        if result.get("invalid"):
+            detail.append(f"invalid controls {result['invalid']}")
+        if reference is not None and result.get("path") == reference.get("path") and not detail:
+            detail.append("a different page state")
+        elif reference is not None and result.get("path") != reference.get("path"):
+            detail.append(f"stays on {result.get('path')}")
+        return "is refused (" + ", ".join(detail or ["a different outcome"]) + ")"
+
+    return refused, describe
+
+
 def describe(result: dict[str, Any]) -> str:
-    if result.get("alerts") or result.get("invalid"):
-        return f"is refused ({len(result.get('alerts') or [])} alert(s), invalid: {result.get('invalid', [])})"
-    headings = result.get("headings") or []
-    return "is accepted" + (f" and shows heading class {headings}" if headings else "")
+    return judge(None)[1](result)
 
 
 def value_for_length(kind: str, n: int) -> str:
@@ -133,5 +169,5 @@ def length_boundary(probe_once: Callable[[str], str], kind: str, reference: dict
     return good
 
 
-def outcome_json(symbol: str) -> str:
-    return json.dumps(outcome(describe_symbol(symbol)), sort_keys=True, ensure_ascii=False)
+def outcome_json(symbol: str, echo: str | None = None) -> str:
+    return json.dumps(outcome(describe_symbol(symbol), echo), sort_keys=True, ensure_ascii=False)
