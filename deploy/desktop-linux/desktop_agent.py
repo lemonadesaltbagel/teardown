@@ -104,13 +104,6 @@ def _states(node) -> list[str]:
 
 
 def _text(node) -> str | None:
-    iface = node.get_text_iface() if hasattr(node, "get_text_iface") else None
-    try:
-        text = node.get_text()  # Atspi.Text interface methods are on the accessible in GI
-    except Exception:  # noqa: BLE001
-        text = None
-    if iface is None and text is None:
-        return None
     try:
         return Atspi.Text.get_text(node, 0, Atspi.Text.get_character_count(node))
     except Exception:  # noqa: BLE001 - not a text object

@@ -211,7 +211,8 @@ class Verifier:
                     codename, f"original no longer matches the released spec after {test.inputs[: step + 1]}",
                     ["re-probe or re-learn this feature", "re-probe the affected claims"])
                 return TestResult(**base, status="inconclusive", step=step, note="original diverged from the spec")
-            if test.match == "exact" and original not in vocabulary:
+            if test.match == "exact" and original not in vocabulary and not any(
+                    symbol_matches(original, v, "exact") for v in vocabulary if v[:1] == original[:1]):
                 self.ledger.record_unknown(
                     codename,
                     f"original produced an output outside the released vocabulary after {test.inputs[: step + 1]}",

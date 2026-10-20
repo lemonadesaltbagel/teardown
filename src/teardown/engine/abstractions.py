@@ -170,8 +170,9 @@ BUILTINS["web.aria/v1"] = web_aria
 
 # -- desktop -----------------------------------------------------------------------------------------------------
 _DESK_VALUE_ROLES = {"text", "entry", "password text", "spin button", "combo box"}
-_DESK_CONTROL_ROLES = _DESK_VALUE_ROLES | {"push button", "toggle button", "check box", "radio button", "menu item",
-                                          "check menu item", "radio menu item", "link", "slider", "page tab"}
+_DESK_CONTROL_ROLES = _DESK_VALUE_ROLES | {"push button", "button", "toggle button", "check box", "radio button",
+                                          "menu item", "check menu item", "radio menu item", "link", "slider",
+                                          "page tab"}
 
 
 def desktop_a11y(observation: Any, params: dict[str, Any]) -> Any:
@@ -179,8 +180,17 @@ def desktop_a11y(observation: Any, params: dict[str, Any]) -> Any:
     if not isinstance(observation, dict) or "tree" not in observation:
         return observation
     out: dict[str, Any] = {"windows": [], "controls": {}, "text": [], "items": []}
+    item_depth = None  # labels nested under a list item / table cell are that item's text
     for n in observation["tree"]:
         role, name, states = n["role"], n.get("name") or "", n.get("states", [])
+        if item_depth is not None and n["depth"] <= item_depth:
+            item_depth = None
+        if role in ("list item", "table cell") and not name.strip():
+            item_depth = n["depth"]
+            continue
+        if item_depth is not None and role == "label" and name.strip():
+            out["items"].append(name.strip())
+            continue
         if role in ("frame", "window", "dialog", "alert"):
             out["windows"].append(f"{role}:{name}" + (":modal" if "modal" in states else ""))
         elif role in _DESK_CONTROL_ROLES:

@@ -85,82 +85,59 @@ novel tool with an independent observer agent: **spec arm 397/397**, hybrid (spe
 
 ## Phase 2: web (L)
 
-- [ ] Driver:
-  - [ ] Embedded Playwright-py on Chrome for Testing.
-  - [ ] CDP used only for the full AX tree and for coverage that steers exploration.
-  - [ ] Fast actions (force-click after our own checks).
-  - [ ] Capture filter: HAR omits code bodies, DOM evidence has no `<script>`/`<style>`, `evaluate` is allow-listed.
-- [ ] State key `(route_tmpl, overlay_stack, auth_role, H_aria, form_vec)`, with APE-style split and merge and secret masking.
-- [ ] Determinism profile: clock, seeded PRNG, fixed timezone/locale/viewport, service workers blocked during replay.
-- [ ] Reset:
-  - [ ] DB/filesystem snapshots for self-hosted targets.
-  - [ ] Checks after each reset: fingerprint, sequence witness and canary.
-  - [ ] Limited-reset mode for SaaS.
-- [ ] Classify each behavior as client, server or both, by comparing three runs: live, HAR-frozen, and direct API where policy allows.
-- [ ] mitmproxy2swagger → OpenAPI → Schemathesis.
-- [ ] Equivalence oracle:
-  - [ ] Explicit budget.
-  - [ ] LLM-proposed round-trip probes.
-  - [ ] States learned versus budget reported as an `unknown`.
-- [ ] Semantic output symbols, or comparison up to output renaming (port `compare.py`).
-- [ ] Bench: TodoMVC (32 tests), then RealWorld (128 E2E tests plus API suites). Report raw and selector-adapted scores.
-- **Exit:** RealWorld clone scored on its hidden E2E and API suites.
+- [x] Driver: embedded Playwright-py (Chromium), role/name actions, fast forced actions after own presence/enabled
+  checks, network-aware settle (in-flight requests), post-action grace, third-party hosts blocked, relative `goto`.
+- [x] Capture filter: accessibility snapshot, URL path, constraint-validation state, API exchanges (method, path
+  template, status) and value-free JSON body shapes only. No script/style bodies, no `evaluate` on app globals.
+- [x] Determinism profile: timezone/locale/viewport, reduced motion, seeded PRNG, service workers blocked.
+- [x] Reset for self-hosted targets: `reset_command` (Conduit: SQLite restored inside the API container) +
+  `reset_check_url` (fails loudly on leaked state). Shared backends run episodes sequentially.
+- [x] Client vs server classification of field refusals (no request / disabled submit vs API 4xx).
+- [x] API contract skeleton (OpenAPI-style, shapes only) released with web specs.
+- [x] Field probing with length boundaries; web rules over action sequences; learning (19-state signup = truth).
+- [x] Web clean-room kits (`export-clean`, `verify-web`), clean-side adapters, web testability contract.
+- [x] RealWorld E2E harness (`bench/conduit/e2e.py`); original passes 101/123 (pinned denominator).
+- [ ] Query-string capture in network symbols (pagination/filter parameters were invisible to the observer).
+- [ ] CDP coverage for exploration steering; APE-style state-key refinement; HAR freeze for 3-way layering.
+- [ ] TodoMVC benchmark; SaaS limited-reset mode.
+- **Exit:** Conduit clone from a Teardown web spec + the public selectors contract, scored on the hidden E2E
+  suite — see `research/12-web-conduit.md`.
 
 ## Phase 3: the barrier as a product (M)
 
-- [ ] Docker Compose for the dirty, gate and clean zones:
-  - [ ] Default-deny egress via iptables.
-  - [ ] Verdaccio/devpi mirror with a block list.
-  - [ ] Fresh `CLAUDE_CONFIG_DIR`.
-  - [ ] Managed settings template.
-- [ ] Gate v1:
-  - [ ] Winnowing and MinHash near-match checks.
-  - [ ] Distinctiveness scoring.
-  - [ ] Auto-built identifier denylist.
-  - [ ] LLM judge (advisory).
-  - [ ] Review UI for strict mode.
-  - [ ] Verdict abstractor with budgets and closure of the equality oracle.
-- [ ] Memorization probes (identification, completion, structural, cross-model) and spec canaries.
-- [ ] Post-hoc similarity reports: Dolos and JPlag for web bundles, imagehash/PDQ for assets.
-- [ ] Remaining audit predicates (`clean-session`, `similarity-report`), DSSE signing, RFC 3161 checkpoints.
-- **Exit:** a full audit dossier for the RealWorld run. The clean runtime passes a leak test covering all 6 known channels, plus WebFetch.
+- [x] Gate HTTP service (`gate-serve`, bearer token) and remote clean room (`clean --gate-url`, `remote-verify`).
+- [x] Docker Compose clean runtime: internal network (no internet, no host), kit-only volume, read-only root, no
+  caps; verified end to end (`docs/clean-runtime.md`). `cli:build:<dir>` clones built by the gate.
+- [x] DSSE-signed audit entries (ed25519 per zone) + chain verification.
+- [x] Winnowing near-verbatim detection; functional-quote approval; strict-mode coverage gate.
+- [x] Stack traces redacted at capture.
+- [ ] Egress proxy for model API access from the clean zone; registry mirror with block list; managed settings
+  template for agents inside the clean container.
+- [ ] MinHash, distinctiveness scoring, auto-built identifier denylist, advisory LLM judge, review UI.
+- [ ] Memorization probes and spec canaries; post-hoc similarity reports (Dolos/JPlag/PDQ); RFC 3161 checkpoints.
 
 ## Phase 4: Android (L)
 
-- [ ] Setup script: cmdline-tools, emulator and an arm64 `google_apis` image (about 10–20 GB); compose file for the macOS host and for Linux KVM.
-- [ ] uiautomator2 driver:
-  - [ ] Semantic actions (role + label + ordinal).
-  - [ ] Normalized a11y-tree hash.
-  - [ ] Never key on resource-id or activity names.
-- [ ] Reset ladder (`pm clear` → snapshot load → wipe), with determinism settings re-applied after every load.
-- [ ] Network tiers N0, N1 and N2.
-- [ ] Logcat reduced to system-level events.
-- [ ] Deep links and intent filters recorded as interface facts.
-- [ ] Intake detectors: FLAG_SECURE, attestation failure, apps with no a11y tree (Flutter, Unity).
-- [ ] Learning:
-  - [ ] Passive EDSM from exploration traces, then active resolution of conflicts.
-  - [ ] Soft "homing" resets.
-- [ ] A "testability contract" section in the spec.
-- [ ] Bench: Loop Habit Tracker, Omni-Notes, AntennaPod, and their hidden Espresso suites. JaCoCo runs in the harness only.
-- **Exit:** clone pass rates on the hidden Espresso suites of the three apps.
+- [x] SDK + emulator installed (cmdline-tools, platform-tools, emulator, android-34 google_apis arm64, AVD).
+- [x] adb driver: role/accessible-name actions, `pm clear` + resolved launcher activity reset, animations off.
+- [x] On-device observer agent (UiAutomation over a forwarded socket): 4-16 ms dumps, exact hint detection;
+  steps 0.26-0.36 s, reset 0.65 s (vs ~6 s / 4.8 s with uiautomator dump).
+- [x] Resource ids / activity names kept out of observations; one device = sequential episodes.
+- [x] Example target + variant built without Gradle; end-to-end test (probe, rules, release, verify, variant caught).
+- [ ] Snapshot-load reset tier; determinism after load (clock via root on google_apis).
+- [ ] Network tiers N0/N1/N2; logcat reduced to system events; deep links/intent filters as interface facts.
+- [ ] Intake detectors (FLAG_SECURE, attestation failure, no-tree apps).
+- [ ] Bench: Loop Habit Tracker / Omni-Notes / AntennaPod with hidden Espresso suites (needs Gradle builds).
 
 ## Phase 5: desktop, Linux then macOS (XL)
 
-- [ ] AT-SPI backend in Docker + Xvfb, with Qt accessibility flags and XTest as the fallback.
-- [ ] AX backend in Tart VMs:
-  - [ ] TCC permissions baked into the image.
-  - [ ] Guest clock control.
-  - [ ] `reduceMotion` set in the guest.
-  - [ ] Container-directory reset.
-  - [ ] Fingerprint check after each reset.
-- [ ] `menu_inventory()` as the seed for the feature list and the learning alphabet. Enabled states become predicates.
-- [ ] `observe_effects`:
-  - [ ] Prefs and data-directory diff.
-  - [ ] mitmproxy local mode.
-  - [ ] File-event tracer, limited to the `effect` tier.
-- [ ] Electron apps routed to the web driver, but only when the app's fuses allow it.
-- [ ] Bench: a GNOME app (dogtail), then Joplin (Playwright `_electron`).
-- **Exit:** Joplin clone scored on its hidden integration tests.
+- [x] Linux AT-SPI backend in a container (Xvfb + D-Bus + AT-SPI + GTK) with an in-container agent; GTK example
+  target; end-to-end test (probe, rules, release, verify, variant caught).
+- [ ] macOS AX backend: Tart VM (≈25 GB image; disk is tight) or an explicitly consented host mode.
+- [ ] Windows UIA backend.
+- [ ] Menu inventory as feature list; `observe_effects` (prefs/data diff, mitmproxy local mode).
+- [ ] Electron apps routed to the web driver when fuses allow; Qt accessibility flags; XTest fallback.
+- [ ] Bench: GNOME app, Joplin.
 
 ## Later: rough tasks, not scheduled
 

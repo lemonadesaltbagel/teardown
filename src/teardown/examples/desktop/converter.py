@@ -8,9 +8,12 @@ absolute zero are refused. Convert is disabled while the input is empty.
 import gi
 
 gi.require_version("Gtk", "3.0")
+import sys  # noqa: E402
+
 from gi.repository import Gtk  # noqa: E402
 
 ABS_ZERO = {"c2f": -273.15, "f2c": -459.67}
+LENIENT = "--lenient" in sys.argv  # variant: no absolute-zero check (for differential tests)
 
 
 class Converter(Gtk.Window):
@@ -60,7 +63,7 @@ class Converter(Gtk.Window):
             self.error.set_text("Please enter a number.")
             self.result.set_text("")
             return
-        if value < ABS_ZERO[self.mode()]:
+        if not LENIENT and value < ABS_ZERO[self.mode()]:
             self.error.set_text("That is below absolute zero.")
             self.result.set_text("")
             return

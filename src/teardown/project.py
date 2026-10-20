@@ -784,7 +784,12 @@ class Project:
         def open_clone(clone_target: str, rel: SpecRelease, adapter: dict[str, Any] | None) -> ObservationSession:
             adapter = adapter or {}
             # A web clone against the same self-hosted backend needs the same per-episode backend reset.
-            options = self.state.target_options if clone_target.startswith("web:") else None
+            if adapter.get("target_options") is not None:  # e.g. a desktop clone's launch argv
+                options = adapter["target_options"]
+            elif clone_target.split(":", 1)[0] == self.state.target_spec.split(":", 1)[0]:
+                options = self.state.target_options
+            else:
+                options = None
             driver = open_driver(clone_target, adapter.get("actions") or rel.spec.get("actions") or {}, options)
             # Built-in abstractions (CLI behavior, structured accessibility snapshot) are public and apply to the
             # clone too. The original's rules stay dirty-side; the clean side supplies its own adapter rules that

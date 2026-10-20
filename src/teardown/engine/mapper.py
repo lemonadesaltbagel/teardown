@@ -106,8 +106,11 @@ def symbol_matches(observed: str, expected: str | None, match: str = "exact") ->
     if expected is None:
         return True
     if match == "exact":
-        return observed == expected
+        # structural, not textual: renaming (codenames) can reorder keys of an otherwise identical symbol
+        return observed == expected or describe_symbol(observed) == describe_symbol(expected)
     want, got = describe_symbol(expected), describe_symbol(observed)
+    if isinstance(want, dict) and not isinstance(got, dict):
+        got = {"value": got}  # non-dict symbols (NA, DISABLED) are written {"value": ...} in outcome expectations
     if not isinstance(want, dict) or not isinstance(got, dict):
         return observed == expected
     # an expected empty list also matches an absent key (abstractions omit empty collections)

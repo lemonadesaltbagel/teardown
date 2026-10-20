@@ -196,7 +196,13 @@ def rename_text(text: str, config: GateConfig) -> str:
 
 def rename_symbol(symbol: str, config: GateConfig) -> str:
     """Apply the release's codename substitution to a live symbol, so it compares with released expectations."""
-    return json.loads(rename_text(json.dumps(symbol, ensure_ascii=False), config)) if config.denylist else symbol
+    if not config.denylist:
+        return symbol
+    renamed = json.loads(rename_text(json.dumps(symbol, ensure_ascii=False), config))
+    try:  # keep symbols canonical after renaming (renamed keys sort differently)
+        return json.dumps(json.loads(renamed), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    except json.JSONDecodeError:
+        return renamed
 
 
 def _string_leaves(value: Any, path: str = "$"):
