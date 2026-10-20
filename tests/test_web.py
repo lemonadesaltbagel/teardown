@@ -116,3 +116,20 @@ def test_web_rules_relations(site, tmp_path):
     assert verifier.verify("web:" + site.url("signup_a.html"), repeats=1).failed == 0
     variant = verifier.verify("web:" + site.url("signup_b.html"), repeats=1)  # b clears the password on Back
     assert variant.failed == 1 and variant.results[0].note == "relation violated"
+
+
+def test_fault_injection_reveals_error_handling_and_query_strings_are_kept(site):
+    d = WebDriver("web:" + site.url("fetcher.html"))
+    try:
+        load = _act(op="click", role="button", name="Load quotes")
+        d.reset()
+        healthy = web_aria(d.step(load), {})
+        assert healthy["network"] == ["GET /quotes.json?page=1 200"] and "first" in healthy["text"]
+        outcomes = {}
+        for mode, extra in (("status", {"status": 503}), ("abort", {}), ("malformed", {})):
+            d.reset()
+            d.step(_act(op="fault", fault={"path": "/quotes.json", "mode": mode, **extra}))
+            outcomes[mode] = web_aria(d.step(load), {}).get("alerts")
+        assert outcomes == {"status": ["Server error 503"], "abort": ["Offline"], "malformed": ["Unreadable reply"]}
+    finally:
+        d.close()

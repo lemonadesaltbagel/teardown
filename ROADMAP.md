@@ -97,7 +97,10 @@ novel tool with an independent observer agent: **spec arm 397/397**, hybrid (spe
 - [x] Field probing with length boundaries; web rules over action sequences; learning (19-state signup = truth).
 - [x] Web clean-room kits (`export-clean`, `verify-web`), clean-side adapters, web testability contract.
 - [x] RealWorld E2E harness (`bench/conduit/e2e.py`); original passes 101/123 (pinned denominator).
-- [ ] Query-string capture in network symbols (pagination/filter parameters were invisible to the observer).
+- [x] Query strings in route and network symbols.
+- [x] Fault-injection action (`op: fault`: 5xx / abort / timeout / malformed JSON on matching API calls) so error
+  handling is observable; documented in the observer guide.
+- [ ] Re-run the Conduit experiment with query strings + fault probes (target ≥ 95/101).
 - [ ] CDP coverage for exploration steering; APE-style state-key refinement; HAR freeze for 3-way layering.
 - [ ] TodoMVC benchmark; SaaS limited-reset mode.
 - **Exit:** Conduit clone from a Teardown web spec + the public selectors contract, scored on the hidden E2E

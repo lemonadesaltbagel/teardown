@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Fetcher</title></head>
+<body><main>
+<h1>Quotes</h1>
+<button type="button" id="load">Load quotes</button>
+<ul id="list" aria-label="Quotes"></ul>
+<p id="status" role="status"></p>
+<p id="error" role="alert" hidden></p>
+</main>
+<script>
+// third-party-style example: fetches /quotes.json; distinct UI for HTTP errors, network failures and bad JSON
+document.getElementById('load').onclick = async () => {
+  const err = document.getElementById('error'), list = document.getElementById('list');
+  err.hidden = true; list.innerHTML = '';
+  try {
+    const r = await fetch('/quotes.json?page=1');
+    if (!r.ok) { err.textContent = 'Server error ' + r.status; err.hidden = false; return; }
+    let data;
+    try { data = await r.json(); } catch (e) { err.textContent = 'Unreadable reply'; err.hidden = false; return; }
+    for (const q of data.quotes) { const li = document.createElement('li'); li.textContent = q; list.appendChild(li); }
+  } catch (e) { err.textContent = 'Offline'; err.hidden = false; }
+};
+</script></body></html>

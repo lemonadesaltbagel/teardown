@@ -97,3 +97,10 @@ p.api_contract()                                                       # value-f
 - A shared self-hosted backend means episodes run one at a time; give each run a fresh reset.
 - `api_contract()` is released with the spec: endpoints, statuses and body *shapes* (no values).
 - Inventory for `coverage`: pages/routes, every form and field, every button/link action, every API endpoint.
+- **Fault injection** (error handling is invisible on a healthy backend): an action
+  `{"op": "fault", "fault": {"path": "/api/articles*", "mode": "status|abort|timeout|malformed", "status": 500}}`
+  makes matching API calls *as received by the observing browser* fail for the rest of the episode; put it before
+  the steps that trigger the call and state rules about what the UI then shows. Cover every important endpoint with
+  5xx, network failure and malformed-body probes. The server is never touched.
+- Route and network symbols include query strings (`/?feed=following`, `GET /api/articles?limit=10&offset=0`):
+  state rules about pagination and filters through them.

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import functools
 import http.server
+import json
 import re
 import subprocess
 import threading
@@ -25,7 +26,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urljoin, urlparse
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from teardown.core.ids import content_id
 from teardown.drivers.base import Action, Driver, DriverCapabilities
@@ -36,11 +37,14 @@ class WebAction(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    op: Literal["click", "fill", "check", "uncheck", "select", "press", "goto"]
+    op: Literal["click", "fill", "check", "uncheck", "select", "press", "goto", "fault"]
     role: str | None = None
     name: str | None = None
     name_regex: bool = False
     value: str | None = None
+    fault: dict[str, Any] | None = Field(
+        default=None, description="op=fault: {path: glob on the API path, mode: status|abort|timeout|malformed, "
+                                  "status: int, method: optional}. Applies to the rest of the episode.")
 
 
 # Read-only probe of the constraint-validation API: the shipped UI contract, not application code.
@@ -98,9 +102,15 @@ _ID_SEGMENT = re.compile(r"^(?:\d+|[0-9a-f]{8}-[0-9a-f-]{27,}|[0-9a-f]{24,})$", 
 
 
 def path_template(url: str) -> str:
-    """URL path with ID-like segments replaced by ``{id}`` (numbers, UUIDs, long hex)."""
-    parts = urlparse(url).path.split("/")
-    return "/".join("{id}" if _ID_SEGMENT.match(p) else p for p in parts) or "/"
+    """URL path with ID-like segments replaced by ``{id}`` (numbers, UUIDs, long hex), plus the query string with
+    sorted keys (pagination and filter parameters are behavior: page sizes, offsets, feed selection)."""
+    from urllib.parse import parse_qsl, urlencode
+
+    parsed = urlparse(url)
+    parts = parsed.path.split("/")
+    path = "/".join("{id}" if _ID_SEGMENT.match(p) else p for p in parts) or "/"
+    query = sorted(parse_qsl(parsed.query, keep_blank_values=True))
+    return path + (f"?{urlencode(query)}" if query else "")
 
 
 def json_shape(value: Any, depth: int = 0) -> Any:
@@ -244,6 +254,9 @@ class WebDriver(Driver):
 
     def _perform(self, a: WebAction) -> str:
         page = self.page
+        if a.op == "fault":
+            self._install_fault(a.fault or {})
+            return "ok"
         if a.op == "goto":  # relative paths resolve against the target's root, so specs stay portable to clones
             page.goto(urljoin(self.url, a.value or ""), wait_until="load")
             return "ok"
@@ -283,6 +296,31 @@ class WebDriver(Driver):
             self.page.wait_for_timeout(10)
             quiet = quiet + 1 if self._inflight == 0 else 0
 
+    def _install_fault(self, fault: dict[str, Any]) -> None:
+        """Fault injection for observation: matching XHR/fetch responses *as received by this browser* are replaced
+        (status, network abort, timeout, malformed JSON). The server is never touched."""
+        import fnmatch
+
+        pattern, mode = fault.get("path", "*"), fault.get("mode", "status")
+        method = (fault.get("method") or "").upper()
+
+        def handler(route):
+            req = route.request
+            path = urlparse(req.url).path
+            if req.resource_type not in ("xhr", "fetch") or not fnmatch.fnmatch(path, pattern) or (
+                    method and req.method != method):
+                return route.fallback()
+            if mode == "abort":
+                return route.abort("failed")
+            if mode == "timeout":
+                return route.abort("timedout")
+            if mode == "malformed":
+                return route.fulfill(status=200, content_type="application/json", body="{not json")
+            return route.fulfill(status=int(fault.get("status", 500)), content_type="application/json",
+                                 body=json.dumps(fault.get("body", {"errors": {"body": ["injected"]}})))
+
+        self.page.route("**/*", handler)
+
     def observe(self) -> Any:
         if self.page is None:
             return self.reset()
@@ -300,8 +338,9 @@ class WebDriver(Driver):
                     break
                 snap = again
         exchanges, self._exchanges = self._exchanges, []
+        url = urlparse(self.page.url)
         return {
-            "path": urlparse(self.page.url).path or "/",
+            "path": (url.path or "/") + (f"?{url.query}" if url.query else ""),
             "aria": snap,
             "form": self.page.evaluate(_FORM_PROBE),
             # API exchanges since the previous observation: method, templated path, status. Never bodies.
