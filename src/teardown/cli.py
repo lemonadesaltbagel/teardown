@@ -20,6 +20,12 @@ def main(argv: list[str] | None = None) -> int:
     where.add_argument("--project", type=Path, help="development only: run the verifier in-process")
     clean.add_argument("--token", help="bearer token for the gate service")
 
+    rv = sub.add_parser("remote-verify", help="clean side: ask the gate service to verify a clone")
+    rv.add_argument("--gate-url", default=None, help="defaults to $TEARDOWN_GATE_URL")
+    rv.add_argument("--token", default=None, help="defaults to $TEARDOWN_GATE_TOKEN")
+    rv.add_argument("--clone", required=True, help="e.g. cli:build:/kit")
+    rv.add_argument("--max-failures", type=int, default=40)
+
     gate = sub.add_parser("gate-serve", help="serve the verifier/spec/tickets over HTTP for the clean side")
     gate.add_argument("--project", required=True, type=Path)
     gate.add_argument("--host", default="127.0.0.1")
@@ -65,15 +71,36 @@ def main(argv: list[str] | None = None) -> int:
 
         build_observe_server(Project(args.project)).run()
     elif args.command == "clean":
-        from teardown.mcp.clean_server import CleanRoom, build_clean_server
+        from teardown.mcp.clean_server import build_clean_server
         from teardown.project import Project
 
-        project = Project(args.project)
-        def verify(clone, adapter=None):
-            return project.verifier().verify(clone, adapter=adapter).model_dump(mode="json")
+        if args.gate_url:
+            from teardown.gate.service import RemoteCleanRoom
 
-        room = CleanRoom(project.releases_dir, project.tickets_dir, verify)
-        build_clean_server(room).run()
+            build_clean_server(RemoteCleanRoom(args.gate_url, args.token)).run()
+        else:
+            build_clean_server(_local_room(Project(args.project))).run()
+    elif args.command == "gate-serve":
+        import time
+
+        from teardown.gate.service import serve
+        from teardown.project import Project
+
+        server = serve(_local_room(Project(args.project)), args.host, args.port, args.token)
+        print(f"gate service on http://{args.host}:{server.server_address[1]}", flush=True)
+        while True:
+            time.sleep(3600)
+    elif args.command == "remote-verify":
+        import json
+        import os
+
+        from teardown.gate.service import RemoteCleanRoom
+
+        room = RemoteCleanRoom(args.gate_url or os.environ["TEARDOWN_GATE_URL"],
+                               args.token or os.environ.get("TEARDOWN_GATE_TOKEN"))
+        verdict = room.verify_against_original(args.clone)
+        verdict["results"] = [r for r in verdict["results"] if r["status"] != "pass"][: args.max_failures]
+        print(json.dumps(verdict, indent=1, ensure_ascii=False))
     elif args.command == "demo":
         import shutil
 

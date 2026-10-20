@@ -3,6 +3,7 @@
 Target specs::
 
     cli:docker:<image>      run inside a locked-down container session (default for anything portable)
+    cli:build:<dir>         build <dir>/Dockerfile (a clone kit) and run that image like cli:docker
     cli:local               run on the host in a scratch directory (no isolation; native tools only)
 
 An action is either a name from the action table (what learners and claims use) or an ad-hoc invocation passed in
@@ -23,6 +24,14 @@ def make_runner(target_spec: str) -> Runner:
     rest = target_spec.removeprefix("cli:")
     if rest.startswith("docker:"):
         return ContainerRunner(rest.removeprefix("docker:"))
+    if rest.startswith("build:"):  # a clone kit directory with a Dockerfile, built by the gate (dirty side)
+        import hashlib
+        import subprocess
+
+        context = rest.removeprefix("build:")
+        tag = "teardown-clone/build-" + hashlib.sha256(context.encode()).hexdigest()[:12]
+        subprocess.run(["docker", "build", "-q", "-t", tag, context], check=True, capture_output=True, timeout=1800)
+        return ContainerRunner(tag)
     if rest == "local":
         return LocalRunner()
     raise ValueError(f"unknown CLI target spec {target_spec!r}; use cli:docker:<image> or cli:local")
