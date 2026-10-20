@@ -54,10 +54,68 @@ uv run --quiet teardown verify --project {project} --clone cli:docker:{image} "$
 """
 
 
-def export_kit(project_root: Path, out: Path) -> str:
+WEB_README = """# Clean-room kit: {codename} (web)
+
+You are implementing a web frontend from a **behavioral specification**. Build it only from `spec.json` (and any
+public documents placed in this directory). Do not look for, recall or reuse an existing implementation; do not use
+the network beyond the backend API named below; do not read anything outside this directory.
+
+- `spec.json` — the released specification (release `{release}`):
+  - `actions`: UI actions by ARIA role and accessible name (`op`: click/fill/check/select/press/goto, `value`).
+  - `rules`: behavioral rules with checks; UI checks run action sequences (`a_inputs`/`b_inputs`) and compare the
+    structured accessibility view on the listed `keys`.
+  - `probe_table` / `claims`: worked examples (field classes, refusals, which side refuses).
+  - `api`: the backend contract observed through the UI (endpoints, statuses, value-free body shapes).
+  - `model`: a learned state machine of a flow, if present.
+- Contract: {contract}
+- The backend is reachable at `{api}`; your frontend calls it directly from the browser.
+- Put a static build in `impl/` with `impl/index.html` as the entry (any framework you write yourself; no CDN
+  assets — third-party hosts are blocked). Unknown paths are served `index.html` (client-side routing).
+- `./verify.sh` serves `impl/` and runs the conformance suite against your build and the original, reporting
+  pass/fail per test with abstract symbols. If your accessible names differ from the spec's, pass an adapter:
+  `./verify.sh --adapter adapter.json` with `{{"actions": {{name: action}}, "rules": [mapper rules]}}`.
+"""
+
+WEB_VERIFY = """#!/bin/sh
+set -e
+cd "$(dirname "$0")"
+KIT=$(pwd)
+cd {repo}
+uv run --quiet teardown verify-web --project {project} --dist "$KIT/impl" "$@"
+"""
+
+
+def export_web_kit(project_root: Path, out: Path, rel, api: str) -> str:
+    import shlex as _shlex
+
+    repo = Path(__file__).resolve().parents[2]
+    link = repo / ".teardown" / "verify" / rel.codename
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(project_root, target_is_directory=True)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "impl").mkdir(exist_ok=True)
+    (out / "spec.json").write_text(json.dumps(rel.spec, indent=1, ensure_ascii=False), encoding="utf-8")
+    (out / "README.md").write_text(WEB_README.format(codename=rel.codename, release=rel.id, api=api,
+                                                     contract=rel.spec["testability_contract"]), encoding="utf-8")
+    verify = out / "verify.sh"
+    verify.write_text(WEB_VERIFY.format(repo=_shlex.quote(str(repo)), project=_shlex.quote(str(link))),
+                      encoding="utf-8")
+    verify.chmod(0o755)
+    if not (out / "impl" / "index.html").exists():
+        (out / "impl" / "index.html").write_text("<!doctype html><title>todo</title>", encoding="utf-8")
+    _check_no_real_names(project_root, out)
+    return str(out)
+
+
+def export_kit(project_root: Path, out: Path, api: str = "") -> str:
     project_root, out = Path(project_root).resolve(), Path(out).resolve()
     rel = load_release(project_root / "releases")
     spec = rel.spec
+    state = json.loads((project_root / "project.json").read_text(encoding="utf-8"))
+    if state["target_spec"].startswith("web:"):
+        return export_web_kit(project_root, out, rel, api)
     commands = sorted({a["argv"][0] for a in (spec.get("actions") or {}).values()})
     if len(commands) != 1:
         raise ValueError(f"kit export expects a single command, found {commands}")
@@ -92,7 +150,7 @@ def _check_no_real_names(project_root: Path, out: Path) -> None:
     terms = [t.casefold() for t in state["gate"]["denylist"] if t]
     hits = [t for t in terms if t in str(out).casefold()]
     for path in out.rglob("*"):
-        if path.is_file() and path.suffix in {".md", ".sh", ".json", ""} | {"Dockerfile"}:
+        if path.is_file() and path.suffix in {".md", ".sh", ".json", ".html", ""}:
             text = path.read_text(encoding="utf-8", errors="replace").casefold()
             hits += [f"{t} in {path.name}" for t in terms if t in text]
     if hits:

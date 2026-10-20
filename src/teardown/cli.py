@@ -45,6 +45,14 @@ def main(argv: list[str] | None = None) -> int:
     export = sub.add_parser("export-clean", help="write the released spec and a clean-room kit to a directory")
     export.add_argument("--project", required=True, type=Path)
     export.add_argument("--out", required=True, type=Path)
+    export.add_argument("--api", default="", help="web kits: the backend API base URL the clone should call")
+
+    vw = sub.add_parser("verify-web", help="serve a static web clone and verify it against the original")
+    vw.add_argument("--project", required=True, type=Path)
+    vw.add_argument("--dist", required=True, type=Path, help="the clone's static build directory")
+    vw.add_argument("--adapter", type=Path)
+    vw.add_argument("--repeats", type=int, default=1)
+    vw.add_argument("--max-failures", type=int, default=40)
 
     bench = sub.add_parser("bench-jq", help="score an implementation on the hidden jq test suite")
     bench.add_argument("--image", required=True)
@@ -127,7 +135,23 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "export-clean":
         from teardown.cleanroom import export_kit
 
-        print(export_kit(args.project, args.out))
+        print(export_kit(args.project, args.out, args.api))
+    elif args.command == "verify-web":
+        import json
+
+        from teardown.drivers.web.driver import LocalSite
+        from teardown.project import Project
+
+        site = LocalSite(args.dist, spa=True)
+        try:
+            adapter = json.loads(args.adapter.read_text(encoding="utf-8")) if args.adapter else None
+            verdict = Project(args.project).verifier().verify("web:" + site.url(""), repeats=args.repeats,
+                                                             adapter=adapter)
+        finally:
+            site.close()
+        failing = [r.model_dump(mode="json") for r in verdict.results if r.status != "pass"]
+        print(json.dumps({"passed": verdict.passed, "failed": verdict.failed, "inconclusive": verdict.inconclusive,
+                          "not_passing": failing[: args.max_failures]}, indent=1, ensure_ascii=False))
     elif args.command == "bench-jq":
         import json
 

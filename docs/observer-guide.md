@@ -69,3 +69,31 @@ draft = p.compile_spec("<feature>"); p.review_spec(draft.id); p.release_spec(dra
 6. **Files**: every output/side-effect file, its content and when it is (not) written.
 
 Release only when `coverage` reports no uncovered inventory items, or record why as unknowns.
+
+## Web targets
+
+```python
+from teardown.drivers.web.driver import LocalSite          # or any URL you are allowed to observe
+p.open_target("web:http://127.0.0.1:4200/", purpose="research", real_names=["<product>"],
+              target_options={"reset_command": ["<restore backend state>"], "reset_check_url": "<GET that must not change>"})
+p.define_actions({"open_signup": {"op": "click", "role": "link", "name": "Sign up"},
+                  "fill_email": {"op": "fill", "role": "textbox", "name": "Email", "value": "a@b.co"}, ...})
+s = p.session(); outputs, evidence, _ = s.run(["open_signup", "fill_email", ...])   # symbols per step
+p.probe_web_field("signup", prefix=[...], role="textbox", name="Email", submit="submit", kind="email")
+p.check_rules("signup", [{"statement": "...", "checks": [{"kind": "same", "a": {"actions": [...]},
+                                                          "b": {"actions": [...]}, "keys": ["controls"]}]}])
+p.learn("signup", alphabet=[...], walks_per_state=100, walk_len=20)   # state machine of a flow (KV/L#)
+p.api_contract()                                                       # value-free backend contract (in the spec)
+```
+
+- Actions address elements by **ARIA role and accessible name** only; values are what you type. A missing element
+  makes the step `NA`; a disabled one `DISABLED`.
+- A symbol is the structured accessibility view: `path`, `headings`, `alerts`, `text`, `controls` (role:name →
+  state flags; textbox values reduced to filled/empty), `invalid`, `network` (API method, path template, status).
+- Rules on UIs compare **sequences**: `{"actions": [...]}` on each side; restrict `keys` to what the rule is about
+  (`controls`, `path`, `alerts`, `network`) so incidental text does not break the relation.
+- Field probes find length limits and classify refusals as client-side (submit disabled / no request) or
+  server-side (API 4xx).
+- A shared self-hosted backend means episodes run one at a time; give each run a fresh reset.
+- `api_contract()` is released with the spec: endpoints, statuses and body *shapes* (no values).
+- Inventory for `coverage`: pages/routes, every form and field, every button/link action, every API endpoint.

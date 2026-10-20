@@ -523,11 +523,23 @@ class Project:
             for o in table.discovery["model"]["options"].values():
                 if not o.get("phantom") and o["names"][0] not in ("--help", "--version", "-h"):
                     items.setdefault(f"option {'/'.join(o['names'])}", list(o["names"]))
-        actions = list(table.actions.values()) if table else []
+        actions = list(table.actions.items()) if table else []
         if feature in state.rules:
-            actions += list(self.workspace.get(state.rules[feature], RuleTable).actions.values())
+            rule_table = self.workspace.get(state.rules[feature], RuleTable)
+            actions += list(rule_table.actions.items())
+            named = self.action_table()
+            for rule in rule_table.rules:  # UI rules: the named actions their sequences use
+                for c in rule.checks:
+                    for name in (c.a_inputs or []) + (c.b_inputs or []):
+                        if name in named:
+                            actions.append((name, named[name]))
+        if not state.target_spec.startswith("cli:"):
+            actions += list(state.actions.items())
 
-        def exercises(action: dict[str, Any], pattern: str) -> bool:
+        def exercises(entry: tuple[str, dict[str, Any]], pattern: str) -> bool:
+            name, action = entry
+            if "argv" not in action:  # UI action: match its name or definition (role, accessible name, value)
+                return pattern in name or pattern in json.dumps(action, ensure_ascii=False)
             argv = action.get("argv", [])[1:]
             if pattern.startswith("-"):  # an option: a token, --opt=value, or a short option attached/bundled
                 return any(t == pattern or t.startswith(pattern + "=") or (
@@ -725,7 +737,9 @@ class Project:
 
         def open_clone(clone_target: str, rel: SpecRelease, adapter: dict[str, Any] | None) -> ObservationSession:
             adapter = adapter or {}
-            driver = open_driver(clone_target, adapter.get("actions") or rel.spec.get("actions") or {})
+            # A web clone against the same self-hosted backend needs the same per-episode backend reset.
+            options = self.state.target_options if clone_target.startswith("web:") else None
+            driver = open_driver(clone_target, adapter.get("actions") or rel.spec.get("actions") or {}, options)
             # Built-in abstractions (CLI behavior, structured accessibility snapshot) are public and apply to the
             # clone too. The original's rules stay dirty-side; the clean side supplies its own adapter rules that
             # map its UI onto the released vocabulary. Clone evidence goes to a scratch workspace.
