@@ -43,8 +43,10 @@ class WebAction(BaseModel):
     name_regex: bool = False
     value: str | None = None
     fault: dict[str, Any] | None = Field(
-        default=None, description="op=fault: {path: glob on the API path, mode: status|abort|timeout|malformed, "
-                                  "status: int, method: optional}. Applies to the rest of the episode.")
+        default=None, description="op=fault: {path: glob on the API path, mode: status|abort|timeout|malformed|hang, "
+                                  "status: int, method: optional}. Applies to the rest of the episode. 'hang' holds "
+                                  "matching requests pending (loading states become observable) until a later "
+                                  "{mode: release, then: continue|abort|timeout|status, status: int}.")
 
 
 # Read-only probe of the constraint-validation API: the shipped UI contract, not application code.
@@ -67,6 +69,21 @@ _SEED_RANDOM = """(() => {
       ((c === 'x' ? next() * 16 : (next() * 4) + 8) | 0).toString(16));
   }
 })();"""
+
+# Public-contract selectors (e.g. from a published markup contract) -> absent | hidden | empty | content.
+# Only selectors the observer supplies from a public document are evaluated; the rest of the DOM stays unobserved.
+_CONTRACT_PROBE = """(sels) => Object.fromEntries(sels.map(sel => {
+  let els = [];
+  try { els = Array.from(document.querySelectorAll(sel)); } catch (e) { return [sel, 'invalid']; }
+  if (!els.length) return [sel, 'absent'];
+  const shown = els.filter(el => {
+    const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden';
+  });
+  if (!shown.length) return [sel, els.every(el => !el.textContent.trim()) ? 'hidden' : 'hidden-content'];
+  return [sel, shown.some(el => el.textContent.trim() || el.querySelector('img, input, textarea, select, svg'))
+    ? 'content' : 'empty'];
+}))"""
 
 _LOCAL = threading.local()
 
@@ -142,18 +159,32 @@ class WebDriver(Driver):
     name = "web"
 
     def __init__(self, target_spec: str, actions: dict[str, WebAction] | None = None, profile: Profile | None = None,
-                 reset_command: list[str] | None = None, reset_check_url: str | None = None):
+                 reset_command: list[str] | None = None, reset_check_url: str | None = None,
+                 contract_selectors: dict[str, Any] | None = None):
         self.url = target_spec.removeprefix("web:")
         self.table = dict(actions or {})
         self.profile = profile or Profile()
         self.reset_command = list(reset_command or [])
         self.reset_check_url = reset_check_url
         self._baseline: bytes | None = None
+        self.contract = self._contract_list(contract_selectors)
+        self._held: list[Any] = []
+        self._hang_handlers: list[Any] = []
         self._ctx = None
         self.page = None
         self._inflight = 0
         self._requests_since_observe = 0
         self._exchanges = []
+
+    @staticmethod
+    def _contract_list(spec: dict[str, Any] | None) -> list[str]:
+        """``{"source": <public document>, "selectors": [...]}``. The source is required: selectors are
+        implementation identifiers unless a public contract names them."""
+        if not spec:
+            return []
+        if not isinstance(spec, dict) or not spec.get("source") or not isinstance(spec.get("selectors"), list):
+            raise ValueError("contract_selectors needs {'source': <public contract document>, 'selectors': [...]}")
+        return sorted({str(s) for s in spec["selectors"]})
 
     def target_fingerprint(self) -> str:
         return content_id("tgt", {"platform": "web", "url": self.url, "profile": self.profile.model_dump()})
@@ -175,6 +206,7 @@ class WebDriver(Driver):
     def reset(self) -> Any:
         self._reset_backend()
         if self._ctx is not None:
+            self._drop_held()
             self._ctx.close()
         p = self.profile
         self._ctx = _browser().new_context(
@@ -201,6 +233,7 @@ class WebDriver(Driver):
             self._ctx.route("**/*", gate)
         self.page = self._ctx.new_page()
         self._inflight = 0
+        self._held, self._hang_handlers = [], []
         self._requests_since_observe = 1  # the initial navigation always settles
 
         self._exchanges: list[dict[str, Any]] = []
@@ -294,7 +327,8 @@ class WebDriver(Driver):
         deadline, quiet = time.monotonic() + self.profile.settle_timeout_ms / 1000, 0
         while time.monotonic() < deadline and quiet < 2:
             self.page.wait_for_timeout(10)
-            quiet = quiet + 1 if self._inflight == 0 else 0
+            # requests held by a 'hang' fault are pending on purpose: they do not keep the page unsettled
+            quiet = quiet + 1 if self._inflight <= len(self._held) else 0
 
     def _install_fault(self, fault: dict[str, Any]) -> None:
         """Fault injection for observation: matching XHR/fetch responses *as received by this browser* are replaced
@@ -303,6 +337,9 @@ class WebDriver(Driver):
 
         pattern, mode = fault.get("path", "*"), fault.get("mode", "status")
         method = (fault.get("method") or "").upper()
+        if mode == "release":
+            self._release(fault)
+            return
 
         def handler(route):
             req = route.request
@@ -314,12 +351,39 @@ class WebDriver(Driver):
                 return route.abort("failed")
             if mode == "timeout":
                 return route.abort("timedout")
+            if mode == "hang":
+                self._held.append(route)
+                return None
             if mode == "malformed":
                 return route.fulfill(status=200, content_type="application/json", body="{not json")
             return route.fulfill(status=int(fault.get("status", 500)), content_type="application/json",
                                  body=json.dumps(fault.get("body", {"errors": {"body": ["injected"]}})))
 
         self.page.route("**/*", handler)
+        if mode == "hang":
+            self._hang_handlers.append(handler)
+
+    def _release(self, fault: dict[str, Any]) -> None:
+        held, self._held = self._held, []
+        then = fault.get("then", "continue")
+        for route in held:
+            try:
+                if then == "continue":
+                    route.fallback()
+                elif then == "abort":
+                    route.abort("failed")
+                elif then == "timeout":
+                    route.abort("timedout")
+                else:
+                    route.fulfill(status=int(fault.get("status", 500)), content_type="application/json",
+                                  body=json.dumps(fault.get("body", {"errors": {"body": ["injected"]}})))
+            except Exception:  # noqa: BLE001 - the page may have dropped the request meanwhile
+                pass
+        # held routes are answered first: unrouting a handler cancels the requests it still holds
+        for handler in self._hang_handlers:  # later matching requests go through again
+            self.page.unroute("**/*", handler)
+        self._hang_handlers = []
+        self._requests_since_observe += len(held)
 
     def observe(self) -> Any:
         if self.page is None:
@@ -348,13 +412,20 @@ class WebDriver(Driver):
                               key=lambda t: (t[0], t[1], t[2] or 0)),
             # value-free JSON shapes of API bodies (keys and types only): the interface, not the data
             "api_shapes": [e for e in exchanges if e.get("request_shape") or e.get("response_shape")],
+            **({"contract": self.page.evaluate(_CONTRACT_PROBE, self.contract)} if self.contract else {}),
         }
 
     def actions(self) -> list[str]:
         return sorted(self.table)
 
+    def _drop_held(self) -> None:
+        """Abort requests a 'hang' fault still holds, so closing the context does not cancel their handlers."""
+        if self._held:
+            self._release({"then": "abort"})
+
     def close(self) -> None:
         if self._ctx is not None:
+            self._drop_held()
             self._ctx.close()
             self._ctx = self.page = None
 

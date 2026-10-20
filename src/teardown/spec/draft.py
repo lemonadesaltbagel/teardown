@@ -94,6 +94,8 @@ class SpecDraft(ContentAddressed):
     actions: dict[str, dict[str, Any]] = Field(default_factory=dict, description="Named actions (definitions).")
     rules: Any = Field(default=None, description="RuleTable of observer-authored rules, if any.")
     api: dict[str, Any] | None = Field(default=None, description="Observed backend contract (value-free shapes).")
+    markup_contract: dict[str, Any] | None = Field(
+        default=None, description="Public-contract selectors observed as `contract` (source + selectors).")
     claims: list[Claim] = Field(default_factory=list)
     unknowns: list[Unknown] = Field(default_factory=list)
 
@@ -114,7 +116,10 @@ class SpecDraft(ContentAddressed):
             "feature": self.feature,
             "vocabulary": self.mapper,
             "abstraction": self.abstraction,
-            "testability_contract": contract_for(self.abstraction, self.probes is not None),
+            "testability_contract": contract_for(self.abstraction, self.probes is not None) + (
+                " The `contract` key gives, per selector listed in `markup_contract` (from the public document it "
+                "names), whether it is absent, hidden, empty or has content; render those elements the same way."
+                if self.markup_contract else ""),
             "completeness": self.model.completeness if self.model else (
                 "probe table only (no state model learned)" if self.probes else "claims only (no state model learned)"),
             "model": model.model_dump(mode="json") if model else None,
@@ -125,6 +130,7 @@ class SpecDraft(ContentAddressed):
             "probe_table": [r.model_dump(mode="json") for r in self.probes.rows] if self.probes else [],
             "rules": rule_records,
             "api": self.api,
+            **({"markup_contract": self.markup_contract} if self.markup_contract else {}),
             "claims": [
                 {
                     "id": c.id,

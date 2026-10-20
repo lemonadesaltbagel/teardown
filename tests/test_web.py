@@ -133,3 +133,68 @@ def test_fault_injection_reveals_error_handling_and_query_strings_are_kept(site)
         assert outcomes == {"status": ["Server error 503"], "abort": ["Offline"], "malformed": ["Unreadable reply"]}
     finally:
         d.close()
+
+
+def test_hang_fault_exposes_pending_state_until_release(site):
+    d = WebDriver("web:" + site.url("fetcher.html"))
+    try:
+        d.reset()
+        d.step(_act(op="fault", fault={"path": "/quotes.json", "mode": "hang"}))
+        pending = web_aria(d.step(_act(op="click", role="button", name="Load quotes")), {})
+        assert "Loading…" in pending["text"] and pending["controls"]["button:Load quotes"] == ["disabled"]
+        assert "network" not in pending  # held, not answered
+        done = web_aria(d.step(_act(op="fault", fault={"mode": "release", "then": "status", "status": 502})), {})
+        assert done["alerts"] == ["Server error 502"] and done["controls"]["button:Load quotes"] == []
+        again = web_aria(d.step(_act(op="click", role="button", name="Load quotes")), {})  # the hang is gone
+        assert again["network"] == ["GET /quotes.json?page=1 200"]
+    finally:
+        d.close()
+
+
+def test_contract_selectors_tell_empty_structure_from_absence(site):
+    contract = {"source": "fetcher markup contract (public)", "selectors": [".quotes-panel", "#list li", ".nope"]}
+    d = WebDriver("web:" + site.url("fetcher.html"), contract_selectors=contract)
+    try:
+        start = web_aria(d.reset(), {})
+        assert start["contract"] == {"#list li": "absent", ".nope": "absent", ".quotes-panel": "empty"}
+        d.step(_act(op="fault", fault={"path": "/quotes.json", "mode": "abort"}))
+        failed = web_aria(d.step(_act(op="click", role="button", name="Load quotes")), {})
+        assert failed["contract"][".quotes-panel"] == "empty"
+        d.reset()
+        loaded = web_aria(d.step(_act(op="click", role="button", name="Load quotes")), {})
+        assert loaded["contract"] == {"#list li": "content", ".nope": "absent", ".quotes-panel": "content"}
+    finally:
+        d.close()
+    with pytest.raises(ValueError):
+        WebDriver("web:" + site.url("fetcher.html"), contract_selectors={"selectors": [".x"]})  # no public source
+
+
+def test_contract_rules_release_and_catch_a_clone_that_drops_the_empty_wrapper(tmp_path):
+    original = (EXAMPLES / "fetcher.html").read_text()
+    root = tmp_path / "site"
+    root.mkdir()
+    (root / "fetcher.html").write_text(original)
+    (root / "quotes.json").write_text((EXAMPLES / "quotes.json").read_text())
+    # the clone removes the panel when loading fails: same accessibility view, different structure
+    (root / "clone.html").write_text(original.replace(
+        "err.textContent = 'Offline'; err.hidden = false;",
+        "err.textContent = 'Offline'; err.hidden = false; document.querySelector('.quotes-panel').remove();"))
+    site = LocalSite(root)
+    try:
+        project = Project(tmp_path / "p")
+        contract = {"source": "fetcher markup contract (public)", "selectors": [".quotes-panel"]}
+        project.open_target("web:" + site.url("fetcher.html"), purpose="research",
+                            target_options={"contract_selectors": contract})
+        project.define_actions({"offline": {"op": "fault", "fault": {"path": "/quotes.json", "mode": "abort"}},
+                                "load": {"op": "click", "role": "button", "name": "Load quotes"}})
+        rules = [{"statement": "A failed load keeps the quotes panel, empty.",
+                  "checks": [{"kind": "outcome", "a": {"actions": ["offline", "load"]},
+                              "expect": {"contract": {".quotes-panel": "empty"}}}]}]
+        assert [r["status"] for r in project.check_rules("quotes", rules, workers=1)["rules"]] == ["corroborated"]
+        rel = project.release_spec(project.compile_spec("quotes").id)
+        assert rel.spec["markup_contract"] == contract and "markup_contract" in rel.spec["testability_contract"]
+        verifier = project.verifier()
+        assert verifier.verify("web:" + site.url("fetcher.html"), repeats=1).failed == 0
+        assert verifier.verify("web:" + site.url("clone.html"), repeats=1).failed == 1
+    finally:
+        site.close()

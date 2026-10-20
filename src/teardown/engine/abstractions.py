@@ -126,7 +126,8 @@ def web_aria(observation: Any, params: dict[str, Any]) -> Any:
     Output keys: ``path`` (URL path), ``headings`` (h1-h2 names), ``alerts`` (alert texts), ``text`` (other
     visible text), ``network`` (API exchanges since the last observation: method, path template, status),
     ``controls`` (role:name -> state flags; textbox values reduced to
-    filled/empty so secrets never reach symbols) and ``invalid`` (form controls failing constraint validation).
+    filled/empty so secrets never reach symbols), ``invalid`` (form controls failing constraint validation) and
+    ``contract`` (state of each selector named by a public markup contract, when the target supplies one).
     Mapper rules then classify the remaining text into semantic classes.
     """
     if not isinstance(observation, dict) or "aria" not in observation:
@@ -159,6 +160,8 @@ def web_aria(observation: Any, params: dict[str, Any]) -> Any:
         out["invalid"] = invalid
     if observation.get("network"):
         out["network"] = [f"{m} {p} {s}" for m, p, s in observation["network"]]
+    if observation.get("contract"):  # public-contract selectors: absent | hidden | empty | content
+        out["contract"] = dict(sorted(observation["contract"].items()))
     for key in ("alerts", "text"):
         if not out[key]:
             out.pop(key)

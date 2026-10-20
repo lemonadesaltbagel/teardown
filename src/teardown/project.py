@@ -111,7 +111,8 @@ def open_driver(target_spec: str, actions: dict[str, dict[str, Any]] | None = No
         from teardown.drivers.web.driver import WebAction, WebDriver
 
         return WebDriver(target_spec, actions={k: WebAction.model_validate(v) for k, v in (actions or {}).items()},
-                         reset_command=options.get("reset_command"), reset_check_url=options.get("reset_check_url"))
+                         reset_command=options.get("reset_command"), reset_check_url=options.get("reset_check_url"),
+                         contract_selectors=options.get("contract_selectors"))
     if target_spec.startswith("desktop:"):
         from teardown.drivers.desktop.driver import DesktopAction, DesktopDriver
 
@@ -151,7 +152,8 @@ class ProjectState(BaseModel):
     actions: dict[str, dict[str, Any]] = Field(default_factory=dict, description="named actions (invocations)")
     coverage: dict[str, dict[str, Any]] = Field(default_factory=dict, description="feature -> last coverage report")
     target_options: dict[str, Any] = Field(default_factory=dict,
-                                           description="driver options, e.g. reset_command, reset_check_url")
+                                           description="driver options, e.g. reset_command, reset_check_url, "
+                                                       "contract_selectors")
 
 
 class Project:
@@ -355,6 +357,8 @@ class Project:
             rules=rule_table,
             actions=_portable_actions(state.actions, state.target_spec),
             api=self.api_contract() if state.target_spec.startswith("web:") else None,
+            markup_contract=state.target_options.get("contract_selectors") if state.target_spec.startswith(
+                "web:") else None,
             claims=sorted(claims, key=lambda c: c.id),
             unknowns=sorted(unknowns, key=lambda u: u.id),
         )

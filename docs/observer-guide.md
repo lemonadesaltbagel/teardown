@@ -102,5 +102,13 @@ p.api_contract()                                                       # value-f
   makes matching API calls *as received by the observing browser* fail for the rest of the episode; put it before
   the steps that trigger the call and state rules about what the UI then shows. Cover every important endpoint with
   5xx, network failure and malformed-body probes. The server is never touched.
+- **Pending states**: `"mode": "hang"` holds matching calls unanswered, so the next observation shows the loading
+  UI (placeholders, disabled buttons). A later `{"op": "fault", "fault": {"mode": "release", "then":
+  "continue|abort|timeout|status", "status": 500}}` answers them and removes the hang.
+- **Public markup contracts**: when the product publishes one (a selectors document for compatible frontends),
+  pass `target_options={"contract_selectors": {"source": "<the public document>", "selectors": [...]}}`. Each
+  observation then carries `contract`: per selector `absent | hidden | empty | content`. This sees structure the
+  accessibility view omits (elements with no accessible content). Use only selectors the public document names;
+  state rules on the `contract` key.
 - Route and network symbols include query strings (`/?feed=following`, `GET /api/articles?limit=10&offset=0`):
   state rules about pagination and filters through them.
