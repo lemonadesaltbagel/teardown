@@ -250,3 +250,30 @@ def test_input_mutations_and_coverage(tmp_path):
     report = project.coverage("sort", {"reverse flag": ["-r"], "made-up feature": ["--frobnicate"]})
     assert report["counts"]["reverse flag"] > 0 and "made-up feature" in report["uncovered"]
     assert any("made-up feature" in u.identity.question for u in project.ledger.unknowns().values())
+
+
+def test_stack_traces_are_redacted_at_capture():
+    from teardown.drivers.cli.runner import redact_traces
+
+    py = (
+        b'tool: bad input\nTraceback (most recent call last):\n  File "/opt/tool/main.py", line 12, in <module>\n'
+        b"    secret_line()\nValueError: x\n"
+    )
+    out = redact_traces(py)
+    assert out.startswith(b"tool: bad input\n") and b"main.py" not in out and b"secret_line" not in out
+    assert b"redacted" in out
+    assert redact_traces(b"plain diagnostic\n") == b"plain diagnostic\n"
+    node = b"Error: boom\n    at run (/srv/app/index.js:3:9)\n"
+    assert b"index.js" not in redact_traces(node)
+
+
+def test_crash_trace_never_reaches_evidence(tmp_path):
+    runner = LocalRunner()
+    try:
+        runner.reset()
+        obs = runner.run(
+            Invocation(argv=["python3", "-c", "import os\ndef f():\n    raise RuntimeError('hidden')\nf()"])
+        )
+        assert obs["exit"] == 1 and "hidden" not in obs["stderr"] and "redacted" in obs["stderr"]
+    finally:
+        runner.close()

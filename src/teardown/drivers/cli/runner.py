@@ -22,6 +22,7 @@ import hashlib
 import io
 import os
 import platform
+import re
 import selectors
 import shlex
 import shutil
@@ -190,8 +191,28 @@ def _decode_rc(rc: int | None) -> tuple[int | None, int | None, bool]:
     return rc, None, False
 
 
+_TRACE_START = re.compile(
+    rb"^(Traceback \(most recent call last\):"  # Python
+    rb"|Exception in thread \S+|\s+at [\w$.<>]+\(.*\)$"  # Java / JVM
+    rb"|goroutine \d+ \[|panic: |stack backtrace:"  # Go, Rust
+    rb"|\s+at .+ \(.+:\d+:\d+\)$"  # Node
+    rb"|   at [\w.]+\(.*\) in )",  # .NET
+    re.M)
+
+
+def redact_traces(stderr: bytes) -> bytes:
+    """Stack traces expose source paths, line numbers and code: implementation tier, never captured. Everything
+    from the first trace marker on is replaced; that a diagnostic was written stays visible."""
+    m = _TRACE_START.search(stderr)
+    if not m:
+        return stderr
+    lines = stderr[m.start():].count(b"\n")
+    return stderr[: m.start()] + b"[stack trace redacted by teardown: %d lines]\n" % lines
+
+
 def _observation(rc, out: bytes, err: bytes, fs: list[dict[str, Any]], timed_out=False) -> dict[str, Any]:
     exit_code, signal, killed = _decode_rc(rc)
+    err = redact_traces(err)
     return {
         "exit": exit_code,
         "signal": signal,
