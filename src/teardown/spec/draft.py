@@ -76,6 +76,7 @@ class SpecDraft(ContentAddressed):
     probes: ProbeTable | None = None
     actions: dict[str, dict[str, Any]] = Field(default_factory=dict, description="Named actions (definitions).")
     rules: Any = Field(default=None, description="RuleTable of observer-authored rules, if any.")
+    api: dict[str, Any] | None = Field(default=None, description="Observed backend contract (value-free shapes).")
     claims: list[Claim] = Field(default_factory=list)
     unknowns: list[Unknown] = Field(default_factory=list)
 
@@ -106,6 +107,7 @@ class SpecDraft(ContentAddressed):
             "actions": actions,
             "probe_table": [r.model_dump(mode="json") for r in self.probes.rows] if self.probes else [],
             "rules": rule_records,
+            "api": self.api,
             "claims": [
                 {
                     "id": c.id,

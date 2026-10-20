@@ -88,6 +88,9 @@ class Profile(BaseModel):
     action_timeout_ms: int = 2000
     navigation_timeout_ms: int = 15000
     settle: Literal["none", "stable", "network"] = "network"
+    post_action_grace_ms: int = 40
+    block_external: bool = True
+    allow_hosts: list[str] = []
     settle_timeout_ms: int = 3000
 
 
@@ -98,6 +101,23 @@ def path_template(url: str) -> str:
     """URL path with ID-like segments replaced by ``{id}`` (numbers, UUIDs, long hex)."""
     parts = urlparse(url).path.split("/")
     return "/".join("{id}" if _ID_SEGMENT.match(p) else p for p in parts) or "/"
+
+
+def json_shape(value: Any, depth: int = 0) -> Any:
+    """Keys and types only: {"user": {"email": "string", "token": "string"}}; arrays by their first element."""
+    if depth > 8:
+        return "..."
+    if isinstance(value, dict):
+        return {k: json_shape(v, depth + 1) for k, v in sorted(value.items())}
+    if isinstance(value, list):
+        return [json_shape(value[0], depth + 1)] if value else []
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if value is None:
+        return "null"
+    return "string"
 
 
 class ResetFailed(RuntimeError):
@@ -156,6 +176,19 @@ class WebDriver(Driver):
         self._ctx.set_default_navigation_timeout(p.navigation_timeout_ms)
         if p.seed_random:
             self._ctx.add_init_script(_SEED_RANDOM)
+        if p.block_external:
+            # Third-party hosts (CDNs, analytics, fonts) are blocked: they make runs nondeterministic and would tell
+            # outside services what is being observed. The target's own host and localhost stay reachable.
+            allowed = {urlparse(self.url).hostname, "127.0.0.1", "localhost", *p.allow_hosts}
+
+            def gate(route):
+                host = urlparse(route.request.url).hostname
+                if host in allowed or route.request.url.startswith(("data:", "blob:")):
+                    route.continue_()
+                else:
+                    route.abort()
+
+            self._ctx.route("**/*", gate)
         self.page = self._ctx.new_page()
         self._inflight = 0
         self._requests_since_observe = 1  # the initial navigation always settles
@@ -169,12 +202,22 @@ class WebDriver(Driver):
         def ended(request):
             self._inflight = max(0, self._inflight - 1)
             if request.resource_type in ("xhr", "fetch"):
+                status, response_shape = None, None
                 try:
-                    status = request.response().status if request.response() else None
-                except Exception:  # noqa: BLE001 - response may be gone for aborted requests
-                    status = None
+                    response = request.response()
+                    if response is not None:
+                        status = response.status
+                        if "json" in (response.headers.get("content-type") or ""):
+                            response_shape = json_shape(response.json())
+                except Exception:  # noqa: BLE001 - aborted requests, empty or non-JSON bodies
+                    pass
+                try:
+                    request_shape = json_shape(request.post_data_json) if request.post_data else None
+                except Exception:  # noqa: BLE001 - non-JSON request bodies
+                    request_shape = None
                 self._exchanges.append({"method": request.method, "path": path_template(request.url),
-                                        "status": status})
+                                        "status": status, "request_shape": request_shape,
+                                        "response_shape": response_shape})
 
         self.page.on("request", started)
         self.page.on("requestfinished", ended)
@@ -193,6 +236,10 @@ class WebDriver(Driver):
             return None
         if outcome == "disabled":
             return "DISABLED"
+        if spec.op in ("click", "press", "select", "check", "uncheck", "goto") and self.profile.settle == "network":
+            # Requests triggered by an event handler start asynchronously; give them a moment to appear before
+            # deciding that nothing needs to settle.
+            self.page.wait_for_timeout(self.profile.post_action_grace_ms)
         return self.observe()
 
     def _perform(self, a: WebAction) -> str:
@@ -260,6 +307,8 @@ class WebDriver(Driver):
             # API exchanges since the previous observation: method, templated path, status. Never bodies.
             "network": sorted({(e["method"], e["path"], e["status"]) for e in exchanges},
                               key=lambda t: (t[0], t[1], t[2] or 0)),
+            # value-free JSON shapes of API bodies (keys and types only): the interface, not the data
+            "api_shapes": [e for e in exchanges if e.get("request_shape") or e.get("response_shape")],
         }
 
     def actions(self) -> list[str]:

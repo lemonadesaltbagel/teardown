@@ -309,6 +309,7 @@ class Project:
             probes=probes,
             rules=rule_table,
             actions=state.actions,
+            api=self.api_contract() if state.target_spec.startswith("web:") else None,
             claims=sorted(claims, key=lambda c: c.id),
             unknowns=sorted(unknowns, key=lambda u: u.id),
         )
@@ -433,6 +434,26 @@ class Project:
         n = self.workspace.add_reference_text(source, text)
         self.audit.append("docs-ingested", {}, {"source": source, "paragraphs": n})
         return n
+
+    def api_contract(self) -> dict[str, Any]:
+        """OpenAPI-style skeleton of the backend contract observed through the UI: paths, methods, statuses and
+        value-free body shapes. No values, so no data or prose from the target."""
+        from teardown.core.model import Evidence
+
+        paths: dict[str, dict[str, Any]] = {}
+        for ev in self.workspace.iter_objects("ev", Evidence):
+            if ev.driver != "web" or not isinstance(ev.payload, dict):
+                continue
+            for ex in ev.payload.get("api_shapes", []) + [
+                    {"method": m, "path": p, "status": st} for m, p, st in ev.payload.get("network", [])]:
+                op = paths.setdefault(ex["path"], {}).setdefault(ex["method"].lower(), {"responses": {}})
+                if ex.get("request_shape") is not None:
+                    op["requestBody"] = ex["request_shape"]
+                if ex.get("status") is not None:
+                    resp = op["responses"].setdefault(str(ex["status"]), {})
+                    if ex.get("response_shape") is not None:
+                        resp["shape"] = ex["response_shape"]
+        return {"openapi": "3.1.0-skeleton", "paths": dict(sorted(paths.items()))}
 
     # -- coverage ------------------------------------------------------------------------------------------------
     def coverage(self, feature: str, inventory: dict[str, list[str]] | None = None, *,
