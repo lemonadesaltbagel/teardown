@@ -72,22 +72,24 @@ class SpecDraft(ContentAddressed):
     abstraction: dict[str, Any] = Field(default_factory=dict, description="Releasable built-in abstraction.")
     model: ModelRecord | None = None
     probes: ProbeTable | None = None
+    actions: dict[str, dict[str, Any]] = Field(default_factory=dict, description="Named actions (definitions).")
     claims: list[Claim] = Field(default_factory=list)
     unknowns: list[Unknown] = Field(default_factory=list)
 
     def release_projection(self) -> dict[str, Any]:
         model = self.model.model if self.model else None
-        actions: dict[str, Any] = {}
+        actions: dict[str, Any] = dict(sorted(self.actions.items()))
         if self.probes:
             used = {r.action for r in self.probes.rows}
             used |= {a for c in self.claims for check in c.identity.all_checks() for a in check.inputs}
-            actions = {k: v for k, v in sorted(self.probes.actions.items()) if k in used}
+            actions.update({k: v for k, v in sorted(self.probes.actions.items()) if k in used})
         return {
             "feature": self.feature,
             "vocabulary": self.mapper,
             "abstraction": self.abstraction,
             "testability_contract": CLI_TESTABILITY_CONTRACT if self.probes else TESTABILITY_CONTRACT,
-            "completeness": self.model.completeness if self.model else "probe table only (no state model learned)",
+            "completeness": self.model.completeness if self.model else (
+                "probe table only (no state model learned)" if self.probes else "claims only (no state model learned)"),
             "model": model.model_dump(mode="json") if model else None,
             "requirements": to_ears(model) if model else [],
             "xstate": to_xstate(model) if model else None,

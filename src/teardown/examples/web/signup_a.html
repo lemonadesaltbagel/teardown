@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Acme — Create your account</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 28rem; margin: 2rem auto; padding: 0 1rem; }
+  .err { color: #b00020; font-size: .9rem; margin: .25rem 0; }
+  .toast { position: fixed; bottom: 1rem; right: 1rem; background: #333; color: #fff; padding: .5rem 1rem; border-radius: 4px; }
+  .row { margin: 1rem 0; }
+  label { display: block; margin-bottom: .25rem; }
+  input[type=email], input[type=password] { width: 100%; padding: .4rem; }
+  nav { display: flex; gap: .5rem; }
+</style>
+</head>
+<body>
+<header>
+  <p class="brand">Acme Cloud</p>
+  <p id="social-proof" hidden></p>
+</header>
+<main id="app"></main>
+<div id="toast-host"></div>
+<script>
+// ---- "third-party" signup wizard (variant A) ----
+(function () {
+  const CONFIG = { emailMax: 40, clearPasswordOnBackFromTerms: false };
+  const params = new URLSearchParams(location.search);
+  const NOISE = params.get('noise') === '1';
+
+  const state = { step: 1, email: '', password: '', terms: false, errors: [], done: false };
+  const app = document.getElementById('app');
+
+  function validateEmail(v) {
+    v = v.trim();
+    if (!v) return 'Please enter your email address.';
+    if (!v.includes('@')) return 'That email address is missing an "@".';
+    if (v.length > CONFIG.emailMax) return 'Email can be at most ' + CONFIG.emailMax + ' characters.';
+    return null;
+  }
+  function validatePassword(v) {
+    const errs = [];
+    if (!v) { errs.push('Please choose a password.'); return errs; }
+    if (v.length < 8) errs.push('Use at least 8 characters.');
+    if (!/[0-9]/.test(v)) errs.push('Include at least one number.');
+    return errs;
+  }
+  function strength(v) {
+    if (!v) return null;
+    return validatePassword(v).length ? 'Weak' : 'Strong';
+  }
+
+  function toast(msg) {
+    if (!NOISE) return;
+    const host = document.getElementById('toast-host');
+    const t = document.createElement('div');
+    t.className = 'toast'; t.setAttribute('role', 'status');
+    t.textContent = msg;
+    host.appendChild(t);
+    setTimeout(() => t.remove(), 200 + Math.floor(Math.random() * 600));
+  }
+  function stamp() {
+    const d = new Date();
+    return d.toLocaleTimeString() + ' (ref ' + Math.random().toString(36).slice(2, 8) + ')';
+  }
+
+  function render() {
+    app.innerHTML = '';
+    const sp = document.getElementById('social-proof');
+    if (NOISE) { sp.hidden = false; sp.textContent = (1000 + Math.floor(Math.random() * 9000)) + ' people signed up this week'; }
+
+    if (state.done) {
+      app.innerHTML = '<h1>You\'re all set!</h1><p>Check your inbox to confirm your address.</p>' +
+        '<p><a href="#" id="again">Start over</a></p>';
+      document.getElementById('again').onclick = (e) => { e.preventDefault(); resetAll(); };
+      return;
+    }
+    const h = document.createElement('h1');
+    h.textContent = ['Your email', 'Choose a password', 'Almost done'][state.step - 1];
+    app.appendChild(h);
+    const prog = document.createElement('p');
+    prog.textContent = 'Step ' + state.step + ' of 3';
+    app.appendChild(prog);
+
+    const form = document.createElement('form');
+    form.noValidate = true;
+    form.onsubmit = (e) => e.preventDefault();
+    app.appendChild(form);
+
+    if (state.step === 1) {
+      form.insertAdjacentHTML('beforeend',
+        '<div class="row"><label for="email">Email</label><input id="email" type="email" autocomplete="off"></div>');
+      const inp = form.querySelector('#email');
+      inp.value = state.email;
+      inp.oninput = () => { state.email = inp.value; if (state.errors.length) { state.errors = []; renderErrors(form); } };
+    } else if (state.step === 2) {
+      form.insertAdjacentHTML('beforeend',
+        '<div class="row"><label for="pw">Password</label><input id="pw" type="password" autocomplete="off">' +
+        '<p id="strength" aria-live="polite"></p></div>');
+      const inp = form.querySelector('#pw');
+      inp.value = state.password;
+      const s = form.querySelector('#strength');
+      const upd = () => { const st = strength(state.password); s.textContent = st ? 'Strength: ' + st : ''; };
+      upd();
+      inp.oninput = () => { state.password = inp.value; upd(); if (state.errors.length) { state.errors = []; renderErrors(form); } };
+    } else {
+      form.insertAdjacentHTML('beforeend',
+        '<div class="row"><label><input id="terms" type="checkbox"> I agree to the Terms of Service</label></div>');
+      const cb = form.querySelector('#terms');
+      cb.checked = state.terms;
+      cb.onchange = () => { state.terms = cb.checked; sub.disabled = !state.terms; };
+    }
+    const errBox = document.createElement('div');
+    errBox.id = 'errors';
+    form.appendChild(errBox);
+    renderErrors(form);
+
+    const nav = document.createElement('nav');
+    form.appendChild(nav);
+    let sub = null;
+    if (state.step > 1) nav.appendChild(btn('Back', back));
+    if (state.step < 3) nav.appendChild(btn('Continue', next));
+    else { sub = btn('Create account', submit); sub.disabled = !state.terms; nav.appendChild(sub); }
+
+    const reset = document.createElement('p');
+    reset.innerHTML = '<a href="#" id="reset">Start over</a>';
+    app.appendChild(reset);
+    reset.querySelector('a').onclick = (e) => { e.preventDefault(); resetAll(); };
+  }
+  function btn(label, fn) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = label; b.onclick = fn; return b;
+  }
+  function renderErrors(form) {
+    const box = form.querySelector('#errors');
+    box.innerHTML = '';
+    for (const e of state.errors) {
+      const p = document.createElement('p');
+      p.className = 'err'; p.setAttribute('role', 'alert'); p.textContent = e;
+      box.appendChild(p);
+    }
+  }
+  function next() {
+    if (state.step === 1) {
+      const e = validateEmail(state.email);
+      state.errors = e ? [e] : [];
+      if (!e) state.step = 2;
+    } else if (state.step === 2) {
+      state.errors = validatePassword(state.password);
+      if (!state.errors.length) state.step = 3;
+    }
+    render();
+    if (!state.errors.length) toast('Draft saved at ' + stamp());
+  }
+  function back() {
+    if (state.step === 3 && CONFIG.clearPasswordOnBackFromTerms) state.password = '';
+    state.errors = [];
+    state.step = Math.max(1, state.step - 1);
+    render();
+  }
+  function submit() {
+    if (!state.terms) return;
+    state.done = true; render();
+    toast('Account created at ' + stamp());
+  }
+  function resetAll() {
+    Object.assign(state, { step: 1, email: '', password: '', terms: false, errors: [], done: false });
+    render();
+  }
+  render();
+})();
+</script>
+</body>
+</html>

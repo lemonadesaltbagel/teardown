@@ -94,11 +94,12 @@ class Verifier:
         *,
         releases_dir: Path,
         open_original: Callable[[SpecRelease], ObservationSession],
-        open_clone: Callable[[str, SpecRelease], ObservationSession],
+        open_clone: Callable[[str, SpecRelease, dict[str, Any] | None], ObservationSession],
         ledger: ClaimLedger,
         audit: AuditLog,
         max_calls_per_release: int = 50,
         max_tests: int = 5000,
+        rename: Callable[[str], str] = lambda symbol: symbol,
     ):
         self.releases_dir = releases_dir
         self.open_original = open_original
@@ -107,9 +108,13 @@ class Verifier:
         self.audit = audit
         self.max_calls = max_calls_per_release
         self.max_tests = max_tests
+        self.rename = rename  # the release's codename substitution, applied to the original's live output
         self._budget_file = releases_dir / "verify-budget.json"
 
-    def verify(self, clone_target: str, release_id: str | None = None, repeats: int = 2) -> AbstractVerdict:
+    def verify(self, clone_target: str, release_id: str | None = None, repeats: int = 2,
+               adapter: dict[str, Any] | None = None) -> AbstractVerdict:
+        """``adapter`` (clean-side data): {"actions": {name: action}, "rules": [mapper rules]} mapping the clone's
+        own UI onto the released action names and output vocabulary. Needed for UI targets, optional for CLIs."""
         rel = load_release(self.releases_dir, release_id)
         calls = json.loads(self._budget_file.read_text()) if self._budget_file.exists() else {}
         if calls.get(rel.id, 0) >= self.max_calls:
@@ -119,13 +124,18 @@ class Verifier:
 
         vocabulary = {o["symbol"] for o in (rel.spec.get("model") or {}).get("outputs", [])}
         vocabulary |= {row["expect"] for row in rel.spec.get("probe_table", [])}
+        for claim in rel.spec.get("claims", []):
+            for check in [claim["check"], *claim.get("cases", [])]:
+                if check.get("match", "exact") == "exact":
+                    vocabulary |= {e for e in check["expect"] if e is not None}
         tests = conformance_suite(rel, self.max_tests)
         original = self.open_original(rel)
-        clone = self.open_clone(clone_target, rel)
+        clone = self.open_clone(clone_target, rel, adapter)
         results: list[TestResult] = []
         try:
             for i, test in enumerate(tests):
-                runs = [original.run(test.inputs, use_cache=False)[0] for _ in range(max(1, repeats))]
+                runs = [[self.rename(o) for o in original.run(test.inputs, use_cache=False)[0]]
+                        for _ in range(max(1, repeats))]
                 observed = clone.run(test.inputs, use_cache=False)[0]
                 results.append(self._judge(i, test, runs, observed, vocabulary, rel.codename))
         finally:

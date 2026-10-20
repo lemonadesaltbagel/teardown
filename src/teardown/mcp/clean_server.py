@@ -27,7 +27,8 @@ INSTRUCTIONS = (
 
 
 class CleanRoom:
-    def __init__(self, releases_dir: Path, tickets_dir: Path, verify: Callable[[str], dict[str, Any]]):
+    def __init__(self, releases_dir: Path, tickets_dir: Path,
+                 verify: Callable[[str, dict[str, Any] | None], dict[str, Any]]):
         self.releases_dir = Path(releases_dir)
         self.tickets_dir = Path(tickets_dir)
         self._verify = verify
@@ -51,8 +52,8 @@ class CleanRoom:
         ticket = json.loads((self.tickets_dir / f"{ticket_id}.json").read_text(encoding="utf-8"))
         return {"ticket": ticket["id"], "status": ticket["status"], "answer": ticket.get("answer")}
 
-    def verify_against_original(self, clone_target: str) -> dict[str, Any]:
-        return self._verify(clone_target)
+    def verify_against_original(self, clone_target: str, adapter: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._verify(clone_target, adapter)
 
 
 def build_clean_server(room: CleanRoom) -> MCPServer:
@@ -76,9 +77,10 @@ def build_clean_server(room: CleanRoom) -> MCPServer:
 
     @server.tool(
         description="Run the spec's conformance suite against your implementation and the original. Returns "
-        "pass/fail/inconclusive per test with expected and observed abstract symbols only."
+        "pass/fail/inconclusive per test with expected and observed abstract symbols only. For UI targets pass an "
+        "`adapter` {actions, rules} mapping your UI onto the spec's action names and output vocabulary."
     )
-    def verify_against_original(clone_target: str) -> dict[str, Any]:
-        return room.verify_against_original(clone_target)
+    def verify_against_original(clone_target: str, adapter: dict[str, Any] | None = None) -> dict[str, Any]:
+        return room.verify_against_original(clone_target, adapter)
 
     return server

@@ -62,7 +62,7 @@ def test_audit_log_covers_the_whole_trip(demo):
 
 def test_mcp_servers_expose_the_expected_tools(demo):
     project: Project = demo["project"]
-    room = CleanRoom(project.releases_dir, project.tickets_dir, lambda c: {"clone": c})
+    room = CleanRoom(project.releases_dir, project.tickets_dir, lambda c, a=None: {"clone": c})
 
     async def tools(server):
         async with Client(server) as client:

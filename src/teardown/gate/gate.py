@@ -174,10 +174,19 @@ def _latest_id(releases_dir: Path) -> str | None:
 
 
 def _replace_names(projection: dict[str, Any], config: GateConfig) -> dict[str, Any]:
-    text = json.dumps(projection, ensure_ascii=False)
+    return json.loads(rename_text(json.dumps(projection, ensure_ascii=False), config))
+
+
+def rename_text(text: str, config: GateConfig) -> str:
+    """Replace denylisted real names with the codename (JSON-escaped forms included)."""
     for term in sorted((d for d in config.denylist if d), key=len, reverse=True):
         text = re.sub(re.escape(json.dumps(term)[1:-1]), config.codename, text, flags=re.IGNORECASE)
-    return json.loads(text)
+    return text
+
+
+def rename_symbol(symbol: str, config: GateConfig) -> str:
+    """Apply the release's codename substitution to a live symbol, so it compares with released expectations."""
+    return json.loads(rename_text(json.dumps(symbol, ensure_ascii=False), config)) if config.denylist else symbol
 
 
 def _string_leaves(value: Any, path: str = "$"):

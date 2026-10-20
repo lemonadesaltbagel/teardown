@@ -26,6 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     verify.add_argument("--project", required=True, type=Path)
     verify.add_argument("--clone", required=True, help="clone target spec, e.g. cli:docker:my/clone-image")
     verify.add_argument("--repeats", type=int, default=1)
+    verify.add_argument("--adapter", type=Path, help="clean-side adapter JSON: {actions, rules}")
     verify.add_argument("--max-failures", type=int, default=40, help="failing tests to list (all are counted)")
 
     export = sub.add_parser("export-clean", help="write the released spec and a clean-room kit to a directory")
@@ -55,8 +56,10 @@ def main(argv: list[str] | None = None) -> int:
         from teardown.project import Project
 
         project = Project(args.project)
-        room = CleanRoom(project.releases_dir, project.tickets_dir,
-                         lambda clone: project.verifier().verify(clone).model_dump(mode="json"))
+        def verify(clone, adapter=None):
+            return project.verifier().verify(clone, adapter=adapter).model_dump(mode="json")
+
+        room = CleanRoom(project.releases_dir, project.tickets_dir, verify)
         build_clean_server(room).run()
     elif args.command == "demo":
         import shutil
@@ -71,7 +74,8 @@ def main(argv: list[str] | None = None) -> int:
 
         from teardown.project import Project
 
-        verdict = Project(args.project).verifier().verify(args.clone, repeats=args.repeats)
+        adapter = json.loads(args.adapter.read_text(encoding="utf-8")) if args.adapter else None
+        verdict = Project(args.project).verifier().verify(args.clone, repeats=args.repeats, adapter=adapter)
         failing = [r.model_dump(mode="json") for r in verdict.results if r.status != "pass"]
         by_kind: dict[str, int] = {}
         for r in verdict.results:

@@ -11,12 +11,13 @@ dependencies = [
 
 [project.optional-dependencies]
 learn = ["aalpy>=1.6.2"]
+web = ["playwright>=1.64"]
 
 [project.scripts]
 teardown = "teardown.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=9", "ruff>=0.17", "aalpy>=1.6.2"]
+dev = ["pytest>=9", "ruff>=0.17", "aalpy>=1.6.2", "playwright>=1.64"]
 
 [build-system]
 requires = ["hatchling"]

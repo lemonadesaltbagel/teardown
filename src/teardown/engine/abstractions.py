@@ -92,3 +92,74 @@ def cli_behavior(observation: Any, params: dict[str, Any]) -> Any:
 
 
 BUILTINS: dict[str, Callable[[Any, dict[str, Any]], Any]] = {"cli.behavior/v1": cli_behavior}
+
+
+# -- web ---------------------------------------------------------------------------------------------------------
+_ARIA_LINE = re.compile(r"^(?P<indent>\s*)- (?P<body>.*)$")
+_ARIA_ROLE = re.compile(r'^(?P<role>[a-z/][a-zA-Z/]*)(?: "(?P<name>(?:[^"\\]|\\.)*)")?(?P<attrs>(?:\s*\[[^\]]*\])*)'
+                        r"(?::\s*(?P<text>.*))?$")
+_VALUE_ROLES = {"textbox", "searchbox", "combobox", "spinbutton"}
+_CONTROL_ROLES = _VALUE_ROLES | {"button", "checkbox", "radio", "switch", "link", "slider", "tab", "menuitem"}
+
+
+def parse_aria(snapshot: str) -> list[dict[str, Any]]:
+    nodes = []
+    for raw in snapshot.splitlines():
+        m = _ARIA_LINE.match(raw)
+        if not m:
+            continue
+        body = m.group("body").rstrip(":")
+        r = _ARIA_ROLE.match(body)
+        if not r:
+            depth = len(m.group("indent")) // 2
+            nodes.append({"depth": depth, "role": "text", "name": None, "attrs": [], "text": body})
+            continue
+        attrs = re.findall(r"\[([^\]]*)\]", r.group("attrs") or "")
+        nodes.append({"depth": len(m.group("indent")) // 2, "role": r.group("role"), "name": r.group("name"),
+                      "attrs": attrs, "text": r.group("text")})
+    return nodes
+
+
+def web_aria(observation: Any, params: dict[str, Any]) -> Any:
+    """Structured, wording-agnostic view of an accessibility snapshot.
+
+    Output keys: ``path`` (URL path), ``headings`` (h1-h2 names), ``alerts`` (alert texts), ``text`` (other
+    visible text), ``controls`` (role:name -> state flags; textbox values reduced to
+    filled/empty so secrets never reach symbols) and ``invalid`` (form controls failing constraint validation).
+    Mapper rules then classify the remaining text into semantic classes.
+    """
+    if not isinstance(observation, dict) or "aria" not in observation:
+        return observation
+    drop_roles = set(params.get("drop_roles", ["status"]))
+    out: dict[str, Any] = {"path": observation.get("path", "/"), "headings": [], "alerts": [], "text": [],
+                           "controls": {}}
+    skip_depth = None
+    for n in parse_aria(observation["aria"]):
+        if skip_depth is not None and n["depth"] > skip_depth:
+            continue
+        skip_depth = None
+        role = n["role"]
+        if role in drop_roles:
+            skip_depth = n["depth"]
+            continue
+        if role == "heading" and any(a in ("level=1", "level=2") for a in n["attrs"]):
+            out["headings"].append(n["name"] or n["text"] or "")
+        elif role == "alert":
+            out["alerts"].append(n["name"] or n["text"] or "")
+        elif role in ("paragraph", "text", "strong", "emphasis") and (n["text"] or "").strip():
+            out["text"].append(n["text"].strip())
+        elif role in _CONTROL_ROLES:
+            flags = sorted(a for a in n["attrs"] if a in ("checked", "disabled", "expanded", "pressed", "selected"))
+            if role in _VALUE_ROLES:
+                flags.append("filled" if (n["text"] or "").strip() else "empty")
+            out["controls"][f"{role}:{n['name'] or ''}"] = flags
+    invalid = sorted(f["name"] for f in observation.get("form", []) if not f.get("valid", True))
+    if invalid:
+        out["invalid"] = invalid
+    for key in ("alerts", "text"):
+        if not out[key]:
+            out.pop(key)
+    return out
+
+
+BUILTINS["web.aria/v1"] = web_aria

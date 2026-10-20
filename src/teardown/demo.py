@@ -66,7 +66,7 @@ def run_demo(root: str | Path, *, walks_per_state: int = 100, walk_len: int = 20
     room = CleanRoom(
         project.releases_dir,
         project.tickets_dir,
-        lambda clone: project.verifier().verify(clone).model_dump(mode="json"),
+        lambda clone, adapter=None: project.verifier().verify(clone, adapter=adapter).model_dump(mode="json"),
     )
     spec = room.get_spec()
     ticket = room.ask_question("Is there a maximum email length?")

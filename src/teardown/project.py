@@ -26,7 +26,16 @@ from teardown.drivers.session import ObservationSession
 from teardown.engine.claims import ClaimLedger
 from teardown.engine.learner import LearnResult, learn
 from teardown.engine.mapper import Mapper
-from teardown.gate.gate import GateConfig, GateMode, QuoteEntry, SpecRelease, make_codename, release, review
+from teardown.gate.gate import (
+    GateConfig,
+    GateMode,
+    QuoteEntry,
+    SpecRelease,
+    make_codename,
+    release,
+    rename_symbol,
+    review,
+)
 from teardown.gate.verifier import Verifier
 from teardown.intake import Intake, Purpose, terms_digest, warnings_for
 from teardown.spec.draft import ModelRecord, ProbeRow, ProbeTable, SpecDraft
@@ -61,12 +70,18 @@ def open_driver(target_spec: str, actions: dict[str, dict[str, Any]] | None = No
 
         table = {k: Invocation.model_validate(v) for k, v in (actions or {}).items()}
         return CliDriver(target_spec, actions=table)
-    raise ValueError(f"no driver for {target_spec!r} yet (fake: and cli: are available)")
+    if target_spec.startswith("web:"):
+        from teardown.drivers.web.driver import WebAction, WebDriver
+
+        return WebDriver(target_spec, actions={k: WebAction.model_validate(v) for k, v in (actions or {}).items()})
+    raise ValueError(f"no driver for {target_spec!r} (fake:, cli: and web: are available)")
 
 
 def default_mapper(target_spec: str, target: str) -> MapperVersion:
     if target_spec.startswith("cli:"):
         return MapperVersion(target=target, builtin="cli.behavior/v1", note="CLI behavior-level abstraction")
+    if target_spec.startswith("web:"):
+        return MapperVersion(target=target, builtin="web.aria/v1", note="structured accessibility snapshot")
     return MapperVersion(target=target, note="identity mapper (no rules yet)")
 
 
@@ -172,9 +187,12 @@ class Project:
         return table
 
     def define_actions(self, actions: dict[str, dict[str, Any]]) -> None:
-        from teardown.drivers.cli.invocation import Invocation
+        if self.state.target_spec.startswith("web:"):
+            from teardown.drivers.web.driver import WebAction as Model
+        else:
+            from teardown.drivers.cli.invocation import Invocation as Model
 
-        validated = {k: Invocation.model_validate(v).model_dump(mode="json") for k, v in actions.items()}
+        validated = {k: Model.model_validate(v).model_dump(mode="json") for k, v in actions.items()}
         state = self.state
         self._save(state.model_copy(update={"actions": {**state.actions, **validated}}))
         self.workspace.add_supplied([str(x) for v in validated.values() for x in _flatten(v)])
@@ -243,8 +261,9 @@ class Project:
 
     def compile_spec(self, feature: str) -> SpecDraft:
         state = self.state
-        if feature not in state.models and feature not in state.probes:
-            raise KeyError(f"nothing learned or probed for feature {feature!r}")
+        feature_claims = [c for c in self.ledger.all().values() if c.identity.feature == feature]
+        if feature not in state.models and feature not in state.probes and not feature_claims:
+            raise KeyError(f"nothing learned, probed or claimed for feature {feature!r}")
         record = self.workspace.get(state.models[feature], ModelRecord) if feature in state.models else None
         probes = self.workspace.get(state.probes[feature], ProbeTable) if feature in state.probes else None
         version = self.workspace.get(state.mapper, MapperVersion)
@@ -254,10 +273,11 @@ class Project:
         draft = SpecDraft(
             feature=feature,
             target=state.target,
-            mapper=record.mapper if record else probes.mapper,
+            mapper=record.mapper if record else probes.mapper if probes else state.mapper,
             abstraction=abstraction,
             model=record,
             probes=probes,
+            actions=state.actions,
             claims=sorted(claims, key=lambda c: c.id),
             unknowns=sorted(unknowns, key=lambda u: u.id),
         )
@@ -375,17 +395,21 @@ class Project:
             return ObservationSession(self.workspace, open_driver(self.state.target_spec, self.action_table()),
                                       self.mapper())
 
-        def open_clone(clone_target: str, rel: SpecRelease) -> ObservationSession:
-            driver = open_driver(clone_target, rel.spec.get("actions") or {})
-            # Built-in abstractions (e.g. CLI behavior) are public and applied to the clone too. Rule-based mappers
-            # stay dirty-side: the clone must expose abstract observations itself (testability contract). Clone
-            # evidence goes to a scratch workspace: clone output is clean-side data.
+        def open_clone(clone_target: str, rel: SpecRelease, adapter: dict[str, Any] | None) -> ObservationSession:
+            adapter = adapter or {}
+            driver = open_driver(clone_target, adapter.get("actions") or rel.spec.get("actions") or {})
+            # Built-in abstractions (CLI behavior, structured accessibility snapshot) are public and apply to the
+            # clone too. The original's rules stay dirty-side; the clean side supplies its own adapter rules that
+            # map its UI onto the released vocabulary. Clone evidence goes to a scratch workspace.
             abstraction = rel.spec.get("abstraction") or {}
             version = MapperVersion(target=driver.target_fingerprint(), builtin=abstraction.get("builtin"),
-                                    params=abstraction.get("params") or {})
+                                    params=abstraction.get("params") or {},
+                                    rules=[MapperRule.model_validate(r) for r in adapter.get("rules", [])])
             return ObservationSession(Workspace(self.root / "clone-runs"), driver, Mapper(version))
 
+        gate = self.state.gate
         return Verifier(
+            rename=lambda symbol: rename_symbol(symbol, gate),
             releases_dir=self.releases_dir,
             open_original=open_original,
             open_clone=open_clone,
