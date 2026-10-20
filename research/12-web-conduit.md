@@ -57,8 +57,67 @@
 - It reports building from the spec, the contract and live API responses, with recognition shaping only the general layout.
 - This experiment demonstrates the web loop on a real app with a real backend. **It is not an uncontaminated measurement of spec value**; `research/11` is that measurement.
 
+## Round 2: query strings + fault injection (re-run)
+
+*Kit: `.teardown/cleanroom/web-r2/` (codename again juniper-falcon), project `.teardown/obs-web2`.*
+
+- **Observer.** Fresh agent with a *neutral* prompt that pointed only at the guide's Web section; no behaviors were taken
+  from the hidden suite. (A first attempt whose prompt carried hidden-suite-derived hints was stopped before it
+  recorded anything, and its artifacts were deleted.) It released:
+  - 358 actions, including fault-injection actions on 18 endpoints (5xx, abort, malformed body, timeout, 404, 401) and
+    query-string deep links;
+  - 13 probed fields (144 rows, 58 claims), **60 rules** (all corroborated), the same 10-state auth model;
+  - 84/88 inventory items covered, 10 unknowns.
+- **Clean implementer.** Fresh agent, the round-1 instructions word for word, plus the same public `SELECTORS.md`.
+  About 1,400 lines of plain HTML/JS/CSS; 2 of 6 verify calls used.
+
+| | Round 1 | Round 2 |
+|---|---|---|
+| Teardown conformance (verify-web) | 342 / 342 | **438 / 438** |
+| Hidden RealWorld E2E (pinned 101) | 80 / 101 (79.2%) | **93 / 101 (92.1%)** |
+
+Per-test comparison (both clones re-scored on the same day; the round-1 clone again scored 80):
+
+| Round-1 failure group | Tests | Round 2 |
+|---|---|---|
+| Query-string routing and pagination (`?page=N`, `?feed=following`, tab hrefs) | 8 | all pass |
+| Server unavailable at start-up (5xx, malformed JSON, network failure or timeout on the current-user fetch) | 5 | all pass |
+| Page wrapper missing after a failed article/profile load (500, network error, 404) | 6 | still fail |
+| Empty bio element | 2 | still fail |
+
+(Round 1's write-up above split the 21 as 8 + 11 + 2 + 2; the per-test re-run gives 8 + 5 + 6 + 2.) The clone
+passes none of the original's 22 inapplicable tests, as expected.
+
+### The 8 remaining failures: empty structure is invisible to the accessibility view
+
+- **Wrapper on failed loads (6 tests).** When the article or profile request fails (500, network error, 404), the
+  original still renders the page wrapper (`.article-page`, `.profile-page`/`.user-info`) with no accessible content.
+  The observer correctly recorded "only header and footer" in the ARIA view, so the clone rendered nothing.
+- **Empty bio element (2 tests).** With a null or cleared bio, the original renders an empty `<p>` in `.user-info`;
+  the clone omits it.
+
+Fault injection made the failed loads observable, and the observer recorded them correctly; what the ARIA view
+lacks is the empty wrapper. In both cases the abstraction cannot tell "an empty element is there" from "nothing is
+there". The public contract
+names exactly these selectors, so the fix is generic and stays at the behavior tier:
+
+- **Contract-selector observations.** When the observer supplies a public contract (selectors from `SELECTORS.md`
+  or similar), `web.aria` records, per listed selector, whether it is present, visible and empty. Rules and
+  conformance can then compare it like any other key. Only selectors from a public document are observed; the
+  rest of the DOM stays out of the record.
+
+### Notes
+
+- Contamination is as in round 1: the implementer recognized RealWorld Conduit and says it followed the spec where
+  spec and memory disagreed (empty-feed text, blank `/login` page when already signed in).
+- Process slips reported by the implementer: it listed a browser cache folder outside the kit (nothing used), and it
+  created a probe user and two articles through the API (the database is reset before every run).
+
 ## Next
 
-- [ ] Query strings in route and network symbols.
-- [ ] Fault-injection probes for web: an API route returns 5xx, is aborted, times out or sends a malformed body. Same for CLI (I/O faults), and Android (network off).
-- [ ] Re-run Conduit with both fixes. Target: ≥ 95/101.
+- [x] Query strings in route and network symbols.
+- [x] Fault-injection probes for web (5xx, abort, timeout, malformed body). CLI (I/O faults) and Android (network
+  off) remain.
+- [x] Re-run Conduit with both fixes: 93/101 (target was ≥ 95).
+- [ ] Contract-selector observations (presence/visibility/emptiness of public-contract selectors), then re-run.
+- [ ] Injected timeouts that actually hang, so pending-state UI is observable.
