@@ -45,18 +45,43 @@ TOOLBOX_IMAGE = "busybox:musl"
 _LOOP = r"""
 BB=/.td/busybox
 mkdir -p /w/work /w/req /w/home
+snap() {
+  # tar of the given req files plus the work tree. Unreadable entries (seeded file modes, or the program's own
+  # chmod) are recorded with their real modes, opened for the snapshot and restored afterwards.
+  locked=$( cd /w && $BB find work ! -perm -u+r -o -type d ! -perm -u+x | $BB head -1 )
+  extra=
+  if [ -n "$locked" ]; then
+    # pre-order: each directory's mode is recorded, then it is opened, then find descends into it
+    ( cd /w && $BB find work -type d -exec $BB sh -c '$0 stat -c "%a %n" "$1"; $0 chmod u+rwx "$1"' $BB {} \; \
+      ) > /w/req/modes_d 2>/dev/null
+    ( cd /w && $BB find work ! -type d -exec $BB stat -c '%a %n' {} + ) > /w/req/modes_f 2>/dev/null
+    ( cd /w && $BB find work -type f -exec $BB chmod u+r {} + ) 2>/dev/null
+    $BB cat /w/req/modes_f /w/req/modes_d > /w/req/modes
+    extra=req/modes
+  fi
+  printf 'R %s\n' "$($BB tar cf - -C /w "$@" $extra work | $BB base64 -w0)"
+  if [ -n "$locked" ]; then
+    ( cd /w && $BB sort -r -k2 /w/req/modes | while read -r m n; do $BB chmod "$m" "$n"; done ) 2>/dev/null
+  fi
+}
 while read -r op data; do
   case "$op" in
     RESET)
-      $BB rm -rf /w/work /w/home && $BB mkdir -p /w/work /w/home
-      [ "$data" = "-" ] || echo "$data" | $BB base64 -d | $BB tar xf - -C /w/work
-      echo OK ;;
+      set -- $data
+      $BB chmod -R u+rwx /w/work 2>/dev/null
+      $BB rm -rf /w/work /w/home /w/req && $BB mkdir -p /w/work /w/home /w/req
+      [ "$1" = "-" ] || echo "$1" | $BB base64 -d | $BB tar xf - -C /w/work
+      if [ -n "$2" ]; then  # seeded modes, deepest first, applied after the contents are in place
+        echo "$2" | $BB base64 -d > /w/req/seedmodes
+        ( cd /w/work && while read -r m n; do $BB chmod "$m" "$n"; done < /w/req/seedmodes )
+      fi
+      snap ;;
     STEP)
       $BB rm -rf /w/req && $BB mkdir -p /w/req
       echo "$data" | $BB base64 -d | $BB tar xf - -C /w/req
       ( cd /w/work && . /w/req/run.sh )
       echo $? > /w/req/rc
-      printf 'R %s\n' "$($BB tar cf - -C /w req/rc req/out req/err work | $BB base64 -w0)" ;;
+      snap req/rc req/out req/err ;;
     QUIT) exit 0 ;;
   esac
 done
@@ -67,7 +92,7 @@ class Runner(ABC):
     isolation: str = "none"
 
     @abstractmethod
-    def reset(self, files: dict[str, str] | None = None) -> None: ...
+    def reset(self, files: dict[str, str] | None = None, modes: dict[str, str] | None = None) -> None: ...
 
     @abstractmethod
     def run(self, invocation: Invocation) -> dict[str, Any]: ...
@@ -110,7 +135,19 @@ def _tar(entries: dict[str, bytes | None]) -> bytes:
     return buf.getvalue()
 
 
-def _seed_tar(files: dict[str, str]) -> bytes:
+def _check_modes(files: dict[str, str], modes: dict[str, str]) -> dict[str, int]:
+    out = {}
+    dirs = {"/".join(Path(n).parts[:i]) for n in files for i in range(1, len(Path(n).parts))}
+    for name, mode in modes.items():
+        if name not in files and name not in dirs:
+            raise ValueError(f"file_modes names a path that is not seeded: {name!r}")
+        if not re.fullmatch(r"[0-7]{3,4}", mode):
+            raise ValueError(f"file mode must be octal, e.g. '000' or '555': {mode!r}")
+        out[name] = int(mode, 8)
+    return out
+
+
+def _seed_tar(files: dict[str, str], modes: dict[str, str] | None = None) -> bytes:
     entries: dict[str, bytes | None] = {}
     for name, text in sorted(files.items()):
         parts = Path(name).parts
@@ -119,23 +156,50 @@ def _seed_tar(files: dict[str, str]) -> bytes:
         for i in range(1, len(parts)):
             entries.setdefault("/".join(parts[:i]), None)
         entries[name] = to_bytes(text)
+    _check_modes(files, modes or {})
     return _tar(entries)
 
 
+def _open_tree(root: Path) -> dict[Path, int]:
+    """Make every entry under root readable by its owner; returns the original modes (pre-order, so locked
+    directories are opened before they are listed)."""
+    modes: dict[Path, int] = {}
+    stack = [root]
+    while stack:
+        cur = stack.pop()
+        for entry in sorted(cur.iterdir()):
+            if entry.is_symlink():
+                continue
+            mode = entry.stat().st_mode & 0o7777
+            want = mode | (0o700 if entry.is_dir() else 0o400)
+            if want != mode:
+                modes[entry] = mode
+                os.chmod(entry, want)
+            if entry.is_dir():
+                stack.append(entry)
+    return modes
+
+
 def _snapshot_tree(root: Path) -> dict[str, tuple[str, int, str, int, bytes | None]]:
+    locked = _open_tree(root)  # seeded file modes or the program's own chmod; restored below
     snap = {}
-    for dirpath, dirnames, filenames in os.walk(root):
-        for name in sorted(dirnames) + sorted(filenames):
-            path = Path(dirpath) / name
-            rel = path.relative_to(root).as_posix()
-            if path.is_symlink():
-                target = os.readlink(path).encode()
-                snap[rel] = ("link", 0, hashlib.sha256(target).hexdigest(), len(target), target)
-            elif path.is_dir():
-                snap[rel] = ("dir", path.stat().st_mode & 0o7777, "", 0, None)
-            else:
-                data = path.read_bytes()
-                snap[rel] = ("file", path.stat().st_mode & 0o7777, hashlib.sha256(data).hexdigest(), len(data), data)
+    try:
+        for dirpath, dirnames, filenames in os.walk(root):
+            for name in sorted(dirnames) + sorted(filenames):
+                path = Path(dirpath) / name
+                rel = path.relative_to(root).as_posix()
+                mode = locked.get(path, path.lstat().st_mode & 0o7777)
+                if path.is_symlink():
+                    target = os.readlink(path).encode()
+                    snap[rel] = ("link", 0, hashlib.sha256(target).hexdigest(), len(target), target)
+                elif path.is_dir():
+                    snap[rel] = ("dir", mode, "", 0, None)
+                else:
+                    data = path.read_bytes()
+                    snap[rel] = ("file", mode, hashlib.sha256(data).hexdigest(), len(data), data)
+    finally:
+        for path, mode in sorted(locked.items(), key=lambda kv: -len(kv[0].parts)):
+            os.chmod(path, mode)
     return snap
 
 
@@ -159,6 +223,18 @@ def _snapshot_tar(data: bytes, prefix: str) -> tuple[dict[str, tuple], dict[str,
             elif m.issym():
                 target = m.linkname.encode()
                 snap[rel] = ("link", 0, hashlib.sha256(target).hexdigest(), len(target), target)
+    return snap, files
+
+
+def _parse_snapshot(reply: bytes) -> tuple[dict[str, tuple], dict[str, bytes]]:
+    """A container ``R <base64 tar>`` reply: the work tree, with the real modes of entries that had to be opened
+    for the snapshot."""
+    snap, files = _snapshot_tar(base64.b64decode(reply[2:]), "work")
+    for line in files.get("req/modes", b"").decode("utf-8", "replace").splitlines():
+        mode, _, name = line.partition(" ")
+        rel = name.removeprefix("work").lstrip("/")
+        if rel in snap and mode.isdigit():
+            snap[rel] = (snap[rel][0], int(mode, 8), *snap[rel][2:])
     return snap, files
 
 
@@ -251,6 +327,7 @@ class ContainerRunner(Runner):
         self._proc: subprocess.Popen | None = None
         self._snap: dict[str, tuple] = {}
         self._seed: dict[str, str] = {}
+        self._modes: dict[str, str] = {}
         self._name = ""
         self._buffer = b""
 
@@ -298,14 +375,21 @@ class ContainerRunner(Runner):
         subprocess.run(["docker", "rm", "-f", self._name], capture_output=True)
         self._proc = None
 
-    def reset(self, files: dict[str, str] | None = None) -> None:
-        self._seed = dict(files or {})
-        payload = base64.b64encode(_seed_tar(self._seed)).decode() if self._seed else "-"
-        if self._request(f"RESET {payload}".encode(), self.step_timeout_s) != b"OK":
+    def reset(self, files: dict[str, str] | None = None, modes: dict[str, str] | None = None) -> None:
+        self._seed, self._modes = dict(files or {}), dict(modes or {})
+        payload = base64.b64encode(_seed_tar(self._seed, self._modes)).decode() if self._seed else "-"
+        order = sorted(_check_modes(self._seed, self._modes).items(), key=lambda kv: -len(Path(kv[0]).parts))
+        if order:
+            lines = "".join(f"{mode:o} {name}\n" for name, mode in order)
+            payload += " " + base64.b64encode(lines.encode()).decode()
+        reply = self._request(f"RESET {payload}".encode(), self.step_timeout_s)
+        if reply is None or not reply.startswith(b"R "):
             self._restart()
-            if self._request(f"RESET {payload}".encode(), self.step_timeout_s) != b"OK":
+            reply = self._request(f"RESET {payload}".encode(), self.step_timeout_s)
+            if reply is None or not reply.startswith(b"R "):
                 raise RuntimeError(f"could not reset container session for {self.image}")
-        self._snap = {k: v for k, v in _snapshot_tar(_seed_tar(self._seed), "")[0].items()} if self._seed else {}
+        # the starting state as the container has it (umask, seeded modes), not as the seed tar describes it
+        self._snap = _parse_snapshot(reply)[0]
 
     def run(self, invocation: Invocation) -> dict[str, Any]:
         if invocation.files:
@@ -317,9 +401,9 @@ class ContainerRunner(Runner):
         reply = self._request(line, invocation.timeout_s + self.step_timeout_s)
         if reply is None or not reply.startswith(b"R "):
             self._restart()
-            self.reset(self._seed)
+            self.reset(self._seed, self._modes)
             return _observation(None, b"", b"", [], timed_out=True)
-        snap, files = _snapshot_tar(base64.b64decode(reply[2:]), "work")
+        snap, files = _parse_snapshot(reply)
         diff = fs_diff(self._snap, snap)
         self._snap = snap
         rc_raw = files.get("req/rc", b"").strip()
@@ -346,7 +430,9 @@ class LocalRunner(Runner):
         self._work = self._root / "work"
         self._snap: dict[str, tuple] = {}
 
-    def reset(self, files: dict[str, str] | None = None) -> None:
+    def reset(self, files: dict[str, str] | None = None, modes: dict[str, str] | None = None) -> None:
+        if self._work.exists():
+            _open_tree(self._work)
         shutil.rmtree(self._work, ignore_errors=True)
         self._work.mkdir(parents=True)
         (self._root / "home").mkdir(exist_ok=True)
@@ -356,6 +442,10 @@ class LocalRunner(Runner):
                 raise ValueError(f"seed file path must be relative: {name!r}")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(to_bytes(text) or b"")
+        # deepest first, so a locked directory does not stop its contents from getting their modes
+        checked = _check_modes(files or {}, modes or {})
+        for name, mode in sorted(checked.items(), key=lambda kv: -len(Path(kv[0]).parts)):
+            os.chmod(self._work / name, mode)
         self._snap = _snapshot_tree(self._work)
 
     def run(self, invocation: Invocation) -> dict[str, Any]:

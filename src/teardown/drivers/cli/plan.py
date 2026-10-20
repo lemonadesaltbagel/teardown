@@ -103,9 +103,10 @@ class Probe(BaseModel):
     @staticmethod
     def make(cmd: str, args: list[str], *, stdin: str | None = None, files: dict[str, str] | None = None,
              env: dict[str, str] | None = None, tags: list[str] | None = None, stdout_mode: str = "pipe",
-             stdin_mode: str | None = None) -> Probe:
+             stdin_mode: str | None = None, file_modes: dict[str, str] | None = None) -> Probe:
         inv = Invocation(argv=[cmd, *args], stdin=stdin, files=files or {}, env=env or {},
-                         stdin_mode=stdin_mode or ("pipe" if stdin is not None else "null"), stdout_mode=stdout_mode)
+                         stdin_mode=stdin_mode or ("pipe" if stdin is not None else "null"), stdout_mode=stdout_mode,
+                         file_modes=file_modes or {})
         return Probe(id=content_id("prb", inv.model_dump(mode="json"))[:24], invocation=inv, tags=list(tags or []))
 
 
@@ -130,6 +131,8 @@ class ProbeHints(BaseModel):
     operand_options: list[list[str]] = Field(default_factory=lambda: [[]],
                                              description="Option prefixes the operand sweep is repeated with.")
     stdio_modes: bool = Field(default=True, description="Probe closed/full stdout and closed stdin.")
+    file_faults: bool = Field(default=True, description="Probe unreadable input files (alone, and before a readable "
+                                                        "one: does the command go on after the error?).")
     extra_argv: dict[str, list[str]] = Field(
         default_factory=dict, description="Observer-designed probes: class name -> argv (run on default_input).")
     mutation_lines: dict[str, str] = Field(
@@ -282,6 +285,17 @@ def plan_sweep(model: dict, hints: ProbeHints) -> list[Probe]:
                              ("stdin:closed", {"stdin_mode": "closed"})):
             probe = Probe.make(hints.cmd, list(hints.base), stdin=din if "stdin_mode" not in kwargs else None,
                                tags=["s:stdio", f"stdio:{mode}"], **kwargs)
+            if probe.id not in ps._seen:
+                ps._seen.add(probe.id)
+                ps.probes.append(probe)
+
+    if hints.file_faults and hints.takes_files and din is not None:  # S6b: permission faults on file operands
+        for fault, args, files, modes in (
+                ("unreadable", ["in.txt"], {"in.txt": din}, {"in.txt": "000"}),
+                ("unreadable_then_readable", ["locked.txt", "in.txt"], {"locked.txt": din, "in.txt": din},
+                 {"locked.txt": "000"})):
+            probe = Probe.make(hints.cmd, [*hints.base, *args], files=files, file_modes=modes,
+                               tags=["s:fault", f"fault:{fault}"])
             if probe.id not in ps._seen:
                 ps._seen.add(probe.id)
                 ps.probes.append(probe)

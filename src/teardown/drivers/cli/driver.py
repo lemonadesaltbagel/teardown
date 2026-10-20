@@ -67,9 +67,9 @@ class CliDriver(Driver):
         invocation = self.resolve(action)
         if invocation is None:
             return None
-        if invocation.files:
-            self.runner.reset({**self.seed, **invocation.files})
-            invocation = invocation.model_copy(update={"files": {}})
+        if invocation.files or invocation.file_modes:
+            self.runner.reset({**self.seed, **invocation.files}, invocation.file_modes)
+            invocation = invocation.model_copy(update={"files": {}, "file_modes": {}})
         return self.runner.run(invocation)
 
     def resolve(self, action: Action) -> Invocation | None:

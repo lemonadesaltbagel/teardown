@@ -36,6 +36,12 @@ draft = p.compile_spec("<feature>"); p.review_spec(draft.id); p.release_spec(dra
 | `extra_argv` | `{case: argv}` designed probes (orderings, combinations, edge cases) |
 | `operand_type`, `operand_forms`, `operand_options` | positional-operand sweeps |
 | `skip_options` | options not to probe (interactive, network, …) |
+| `stdio_modes`, `file_faults` | on by default: closed/full stdout, closed stdin; an unreadable input file, alone and before a readable one |
+
+Any invocation (rule sides, designed probes) can seed permission faults with `file_modes`:
+`{"argv": [...], "files": {"in.txt": "...", "out/keep": ""}, "file_modes": {"in.txt": "000", "out": "555"}}`
+(unreadable file, read-only directory). The program runs unprivileged, so the modes bite; they are the starting
+state, so only the program's own changes show up as file effects.
 
 ### Rules for `check_rules`
 

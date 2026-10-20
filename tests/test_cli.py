@@ -111,6 +111,8 @@ def test_cli_round_trip_locally_on_system_cut(tmp_path):
     assert summary["claims"] > 0 and summary["rows"] > 10
     statuses = {c.status for c in project.ledger.all().values()}
     assert statuses == {"corroborated"}
+    faults = [c.identity.statement for c in project.ledger.all().values() if "file fault" in c.identity.statement]
+    assert any("unreadable" in f and "EACCES" in f for f in faults)  # permission faults are probed and mined
     rel = project.release_spec(project.compile_spec("cut").id)
     assert rel.spec["actions"] and rel.spec["probe_table"] and rel.spec["interface"]["command"] == "cut"
     verdict = project.verifier().verify("cli:local", repeats=1)
@@ -128,6 +130,39 @@ def test_container_isolation():
         obs = runner.run(Invocation(argv=["sh", "-c", "sleep 30"], timeout_s=1))
         assert obs["timed_out"]
         assert runner.run(Invocation(argv=["seq", "3"]))["stdout"] == "1\n2\n3\n"  # session survives a timeout
+    finally:
+        runner.close()
+
+
+def _permission_faults(runner):
+    runner.reset({"in.txt": "b\na\n", "out/keep": ""}, {"in.txt": "000", "out": "555"})
+    obs = runner.run(Invocation(argv=["cat", "in.txt"]))
+    assert obs["exit"] != 0 and cli_behavior(obs, {})["errno"] == "EACCES"
+    assert obs["fs"] == []  # the seeded modes are the starting state, not an effect of the program
+    obs = runner.run(Invocation(argv=["sh", "-c", "echo x > out/new.txt"]))
+    assert obs["exit"] != 0 and cli_behavior(obs, {})["errno"] == "EACCES" and obs["fs"] == []
+    assert runner.run(Invocation(argv=["cat", "in.txt"]))["exit"] != 0  # modes survive the snapshot
+    obs = runner.run(Invocation(argv=["chmod", "644", "in.txt"]))  # the program's own chmod is an effect
+    assert [(e["op"], e["path"], e["mode"]) for e in obs["fs"]] == [("modify", "in.txt", "0o644")]
+    runner.reset()  # a locked tree does not block the next reset
+    assert runner.run(Invocation(argv=["ls"]))["stdout"] == ""
+
+
+def test_seeded_file_modes_local():
+    runner = LocalRunner()
+    try:
+        _permission_faults(runner)
+        with pytest.raises(ValueError):
+            runner.reset({"a": ""}, {"b": "000"})
+    finally:
+        runner.close()
+
+
+@needs_docker
+def test_seeded_file_modes_in_container():
+    runner = ContainerRunner("debian:stable-slim")
+    try:
+        _permission_faults(runner)
     finally:
         runner.close()
 

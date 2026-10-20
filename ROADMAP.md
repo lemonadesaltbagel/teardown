@@ -43,6 +43,7 @@
   - [x] Pairwise combinations over accepted value classes only (two-phase planning).
   - [x] Single-fault probes for invalid values.
   - [x] Every argv element tagged as a factor; operand templates; stdio-mode probes.
+  - [x] Permission faults: seeded `file_modes` on any invocation; planned unreadable-file probes.
 - [x] `calibrate_noise`: reordered rerun plus a one-at-a-time env variation sweep (TZ, LC_ALL, LANG).
 - [x] Comparison: behavior-level abstraction (`cli.behavior/v1`: exit, stdout, diagnostic + errno class, fs).
 - [ ] Claim kinds:
@@ -102,8 +103,9 @@ novel tool with an independent observer agent: **spec arm 397/397**, hybrid (spe
   handling is observable; documented in the observer guide.
 - [x] Re-run the Conduit experiment with query strings + fault probes: 93/101 (was 80; target ≥ 95). The remaining 8
   are empty elements (page wrapper after a failed load, empty bio) that the accessibility view cannot see.
-- [ ] Contract-selector observations: presence/visibility/emptiness of selectors named in a public contract.
-- [ ] Fault injection with a real hang (`timeout` that stays pending) so loading/disabled states are observable.
+- [x] Contract-selector observations (`contract_selectors` with a public source): absent/hidden/empty/content.
+- [x] `hang` / `release` faults: calls held pending so loading/disabled states are observable.
+- [ ] Conduit round 3 with both (target ≥ 95/101).
 - [ ] CDP coverage for exploration steering; APE-style state-key refinement; HAR freeze for 3-way layering.
 - [ ] TodoMVC benchmark; SaaS limited-reset mode.
 - **Exit:** Conduit clone from a Teardown web spec + the public selectors contract, scored on the hidden E2E

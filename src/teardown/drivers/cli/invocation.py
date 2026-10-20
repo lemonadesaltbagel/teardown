@@ -30,6 +30,10 @@ class Invocation(BaseModel):
     argv: list[str] = Field(description="Full argv including the program name.")
     stdin: str | None = Field(default=None, description="latin-1 encoded bytes fed to stdin (stdin_mode=pipe).")
     files: dict[str, str] = Field(default_factory=dict, description="Files written into the work dir first.")
+    file_modes: dict[str, str] = Field(
+        default_factory=dict, description="Octal permission modes for seed paths (files or their directories), e.g. "
+                                          "{'in.txt': '000'} (unreadable) or {'out': '555'} (read-only directory). "
+                                          "Part of the starting state: the program runs as an unprivileged user.")
     env: dict[str, str] = Field(default_factory=dict, description="Overrides on top of the canonical environment.")
     stdin_mode: StdinMode = "pipe"
     stdout_mode: StdoutMode = "pipe"

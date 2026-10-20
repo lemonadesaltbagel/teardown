@@ -59,6 +59,8 @@ def _factor(tags: list[str]) -> tuple[str, str] | None:
         return "designed case", tag["case"]
     if strategy == "stdio" and "stdio" in tag:
         return "stdio mode", tag["stdio"]
+    if strategy == "fault" and "fault" in tag:
+        return "file fault", tag["fault"]
     if strategy == "env" and "env" in tag:
         return "locale", tag["env"]
     return None
