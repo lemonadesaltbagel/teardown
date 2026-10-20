@@ -1,0 +1,9 @@
+[project]
+name = "teardown-cli-spike"
+version = "0.0.1"
+description = "Feasibility spike: black-box CLI discovery, probing, differential testing, claim mining"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv]
+package = false

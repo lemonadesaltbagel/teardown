@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tasks</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 30rem; margin: 2rem auto; padding: 0 1rem; }
+  li.done label { text-decoration: line-through; color: #888; }
+  footer { display: flex; gap: .75rem; align-items: center; margin-top: 1rem; }
+  [aria-pressed=true] { font-weight: bold; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Tasks</h1>
+  <input id="new" aria-label="New task" placeholder="What needs doing?">
+  <ul id="list" aria-label="Task list"></ul>
+  <footer id="foot"></footer>
+</main>
+<script>
+// ---- "third-party" mini TodoMVC ----
+(function () {
+  let items = [], filter = 'all', nextId = 1;
+  const list = document.getElementById('list'), foot = document.getElementById('foot');
+  const input = document.getElementById('new');
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const t = input.value.trim();
+    if (!t) return;
+    items.push({ id: nextId++, title: t, done: false });
+    input.value = ''; render();
+  });
+  function render() {
+    list.innerHTML = '';
+    const shown = items.filter(i => filter === 'all' || (filter === 'active') !== i.done);
+    for (const it of shown) {
+      const li = document.createElement('li');
+      if (it.done) li.className = 'done';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.checked = it.done; cb.id = 'cb' + it.id;
+      cb.onchange = () => { it.done = cb.checked; render(); };
+      const lb = document.createElement('label'); lb.htmlFor = cb.id; lb.textContent = it.title;
+      const del = document.createElement('button'); del.textContent = 'Delete'; del.setAttribute('aria-label', 'Delete ' + it.title);
+      del.onclick = () => { items = items.filter(x => x !== it); render(); };
+      li.append(cb, lb, del); list.appendChild(li);
+    }
+    foot.innerHTML = '';
+    if (!items.length) return;
+    const left = items.filter(i => !i.done).length;
+    const c = document.createElement('span'); c.textContent = left + (left === 1 ? ' item left' : ' items left');
+    foot.appendChild(c);
+    for (const f of ['all', 'active', 'completed']) {
+      const b = document.createElement('button'); b.textContent = f[0].toUpperCase() + f.slice(1);
+      b.setAttribute('aria-pressed', String(filter === f)); b.onclick = () => { filter = f; render(); };
+      foot.appendChild(b);
+    }
+    if (items.some(i => i.done)) {
+      const cc = document.createElement('button'); cc.textContent = 'Clear completed';
+      cc.onclick = () => { items = items.filter(i => !i.done); render(); };
+      foot.appendChild(cc);
+    }
+  }
+  render();
+})();
+</script>
+</body>
+</html>
