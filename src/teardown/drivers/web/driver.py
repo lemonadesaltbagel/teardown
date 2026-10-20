@@ -23,7 +23,7 @@ import time
 import urllib.request
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from pydantic import BaseModel, ConfigDict
 
@@ -244,8 +244,8 @@ class WebDriver(Driver):
 
     def _perform(self, a: WebAction) -> str:
         page = self.page
-        if a.op == "goto":
-            page.goto(a.value or self.url, wait_until="load")
+        if a.op == "goto":  # relative paths resolve against the target's root, so specs stay portable to clones
+            page.goto(urljoin(self.url, a.value or ""), wait_until="load")
             return "ok"
         if a.op == "press" and not a.role:
             page.keyboard.press(a.value or "Enter")
@@ -351,3 +351,13 @@ class LocalSite:
 
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples" / "web"
+
+
+def shutdown_browser() -> None:
+    """Close this thread's browser and Playwright instance (the sync API holds an event loop on the thread)."""
+    browser, pw = getattr(_LOCAL, "browser", None), getattr(_LOCAL, "pw", None)
+    _LOCAL.browser = _LOCAL.pw = None
+    if browser is not None:
+        browser.close()
+    if pw is not None:
+        pw.stop()

@@ -27,6 +27,23 @@ CLI_TESTABILITY_CONTRACT = (
     "its errno class), and file-system effects. Diagnostic wording is yours to choose."
 )
 
+WEB_TESTABILITY_CONTRACT = (
+    "Conformance drives your UI only through the actions in `actions` (ARIA role + accessible name; `goto` values "
+    "are paths relative to your app's root) and compares the structured accessibility view on the keys each test "
+    "names: route path, headings, alerts, visible text, control states (role:name -> flags; field values only as "
+    "filled/empty), invalid fields and API exchanges (method, path template, status). Expose the same roles and "
+    "accessible names, or provide an adapter mapping. Visual design and wording beyond those names are yours."
+)
+
+
+def contract_for(abstraction: dict[str, Any], has_probes: bool) -> str:
+    builtin = (abstraction or {}).get("builtin")
+    if builtin == "web.aria/v1":
+        return WEB_TESTABILITY_CONTRACT
+    if builtin == "cli.behavior/v1":
+        return CLI_TESTABILITY_CONTRACT
+    return TESTABILITY_CONTRACT
+
 
 class ProbeRow(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -97,7 +114,7 @@ class SpecDraft(ContentAddressed):
             "feature": self.feature,
             "vocabulary": self.mapper,
             "abstraction": self.abstraction,
-            "testability_contract": CLI_TESTABILITY_CONTRACT if self.probes else TESTABILITY_CONTRACT,
+            "testability_contract": contract_for(self.abstraction, self.probes is not None),
             "completeness": self.model.completeness if self.model else (
                 "probe table only (no state model learned)" if self.probes else "claims only (no state model learned)"),
             "model": model.model_dump(mode="json") if model else None,

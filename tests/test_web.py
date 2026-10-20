@@ -23,9 +23,12 @@ ACTIONS = {
 
 @pytest.fixture(scope="module")
 def site():
+    from teardown.drivers.web.driver import shutdown_browser
+
     s = LocalSite(EXAMPLES)
     yield s
     s.close()
+    shutdown_browser()
 
 
 def _act(**params):

@@ -57,6 +57,21 @@ class DiscoveryRecord(ContentAddressed):
     data: dict[str, Any]
 
 
+def _portable_actions(actions: dict[str, dict[str, Any]], target_spec: str) -> dict[str, dict[str, Any]]:
+    """Web `goto` actions with the original's absolute origin become root-relative paths (portable to clones)."""
+    if not target_spec.startswith("web:"):
+        return actions
+    from urllib.parse import urlparse
+
+    origin = "{0.scheme}://{0.netloc}".format(urlparse(target_spec.removeprefix("web:")))
+    out = {}
+    for name, a in actions.items():
+        if a.get("op") == "goto" and isinstance(a.get("value"), str) and a["value"].startswith(origin):
+            a = {**a, "value": a["value"][len(origin):] or "/"}
+        out[name] = a
+    return out
+
+
 def _drop_masked_text(check):
     """A folded claim covers several typed values; drop outcome lists that only match with the echo masked."""
     expect = []
@@ -320,7 +335,7 @@ class Project:
             model=record,
             probes=probes,
             rules=rule_table,
-            actions=state.actions,
+            actions=_portable_actions(state.actions, state.target_spec),
             api=self.api_contract() if state.target_spec.startswith("web:") else None,
             claims=sorted(claims, key=lambda c: c.id),
             unknowns=sorted(unknowns, key=lambda u: u.id),
