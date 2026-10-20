@@ -500,8 +500,9 @@ class Project:
         for m in mined:
             checks = [_drop_masked_text(c) for c in m.checks]
             head, *rest = checks
+            layer = fp.layer_of(m.outcome) if m.kind == "refusal" else "unknown"
             claim = self.propose_claim(feature=feature, kind=m.kind, statement=m.statement, inputs=head.inputs,
-                                       expect=head.expect, match="subset", cases=rest)
+                                       expect=head.expect, match="subset", cases=rest, layer=layer)
             self.ledger.record_batch(claim.id, 2 * len(m.checks), [])
         for row in mixed:
             self.ledger.record_unknown(feature, f"value class '{row['class']}' of {row['factor']} has mixed outcomes",

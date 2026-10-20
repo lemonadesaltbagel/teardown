@@ -91,6 +91,15 @@ class Profile(BaseModel):
     settle_timeout_ms: int = 3000
 
 
+_ID_SEGMENT = re.compile(r"^(?:\d+|[0-9a-f]{8}-[0-9a-f-]{27,}|[0-9a-f]{24,})$", re.I)
+
+
+def path_template(url: str) -> str:
+    """URL path with ID-like segments replaced by ``{id}`` (numbers, UUIDs, long hex)."""
+    parts = urlparse(url).path.split("/")
+    return "/".join("{id}" if _ID_SEGMENT.match(p) else p for p in parts) or "/"
+
+
 class ResetFailed(RuntimeError):
     pass
 
@@ -114,6 +123,7 @@ class WebDriver(Driver):
         self.page = None
         self._inflight = 0
         self._requests_since_observe = 0
+        self._exchanges = []
 
     def target_fingerprint(self) -> str:
         return content_id("tgt", {"platform": "web", "url": self.url, "profile": self.profile.model_dump()})
@@ -150,12 +160,21 @@ class WebDriver(Driver):
         self._inflight = 0
         self._requests_since_observe = 1  # the initial navigation always settles
 
+        self._exchanges: list[dict[str, Any]] = []
+
         def started(_request):
             self._inflight += 1
             self._requests_since_observe += 1
 
-        def ended(_request):
+        def ended(request):
             self._inflight = max(0, self._inflight - 1)
+            if request.resource_type in ("xhr", "fetch"):
+                try:
+                    status = request.response().status if request.response() else None
+                except Exception:  # noqa: BLE001 - response may be gone for aborted requests
+                    status = None
+                self._exchanges.append({"method": request.method, "path": path_template(request.url),
+                                        "status": status})
 
         self.page.on("request", started)
         self.page.on("requestfinished", ended)
@@ -233,10 +252,14 @@ class WebDriver(Driver):
                 if again == snap:
                     break
                 snap = again
+        exchanges, self._exchanges = self._exchanges, []
         return {
             "path": urlparse(self.page.url).path or "/",
             "aria": snap,
             "form": self.page.evaluate(_FORM_PROBE),
+            # API exchanges since the previous observation: method, templated path, status. Never bodies.
+            "network": sorted({(e["method"], e["path"], e["status"]) for e in exchanges},
+                              key=lambda t: (t[0], t[1], t[2] or 0)),
         }
 
     def actions(self) -> list[str]:

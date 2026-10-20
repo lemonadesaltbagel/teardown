@@ -124,7 +124,8 @@ def web_aria(observation: Any, params: dict[str, Any]) -> Any:
     """Structured, wording-agnostic view of an accessibility snapshot.
 
     Output keys: ``path`` (URL path), ``headings`` (h1-h2 names), ``alerts`` (alert texts), ``text`` (other
-    visible text), ``controls`` (role:name -> state flags; textbox values reduced to
+    visible text), ``network`` (API exchanges since the last observation: method, path template, status),
+    ``controls`` (role:name -> state flags; textbox values reduced to
     filled/empty so secrets never reach symbols) and ``invalid`` (form controls failing constraint validation).
     Mapper rules then classify the remaining text into semantic classes.
     """
@@ -156,6 +157,8 @@ def web_aria(observation: Any, params: dict[str, Any]) -> Any:
     invalid = sorted(f["name"] for f in observation.get("form", []) if not f.get("valid", True))
     if invalid:
         out["invalid"] = invalid
+    if observation.get("network"):
+        out["network"] = [f"{m} {p} {s}" for m, p, s in observation["network"]]
     for key in ("alerts", "text"):
         if not out[key]:
             out.pop(key)

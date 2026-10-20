@@ -63,6 +63,22 @@
     `abs`, path-expression errors and `strftime` errors are found before release.
   - [ ] Teardown specs beat README-only specs on a CLI-Tool-Bench subset.
 
+## Phase 1.5: spec quality (priority, from the uncontaminated benchmark, `research/10-novel-benchmark.md`)
+
+On a novel tool, the Teardown spec arm scored 84.7% on the hidden suite against 97.0% for an implementer with the
+author's manual. The arms fail on disjoint cases (union 97.7%). Probe tables plus mined decision-table claims are too
+shallow to carry a rich language; the gap is on the observer side.
+
+- [ ] Observer-authored rule claims (natural-language rule + formal check), with automatic targeted probe generation
+  and falsification; mined claims stay as supporting evidence.
+- [ ] Feature inventory + coverage gate: options/formats/modes from help, sections/functions/edge cases from public
+  docs; unprobed items block release or become explicit unknowns.
+- [ ] Wider input fixtures (value classes × several inputs) and generated input-format probes (escapes, headers,
+  field counts, comments/blank lines).
+- [ ] Docs-to-claims: documentation rules rewritten as claims (observer's words), verified by probes, conflicts
+  reported. Never copy documentation prose (the docs arm reproduced help text verbatim).
+- [ ] Re-run the novel benchmark with a fresh tool; target spec arm ≥ docs arm with no target prose in the clone.
+
 ## Phase 2: web (L)
 
 - [ ] Driver:

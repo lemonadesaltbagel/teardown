@@ -36,7 +36,7 @@ def test_driver_observes_behavior_tier_only(site):
     d = WebDriver("web:" + site.url("signup_a.html"))
     try:
         obs = d.reset()
-        assert set(obs) == {"path", "aria", "form"} and "<script" not in json.dumps(obs)
+        assert set(obs) == {"path", "aria", "form", "network"} and "<script" not in json.dumps(obs)
         assert web_aria(obs, {})["headings"] == ["Your email"]
         assert d.step(_act(op="click", role="button", name="Nope")) is None  # absent -> NA
         d.step(_act(op="fill", role="textbox", name="Email", value="jane@example.com"))

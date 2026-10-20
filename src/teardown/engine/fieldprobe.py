@@ -39,7 +39,17 @@ NUMBER = {"empty": "", "zero": "0", "one": "1", "negative": "-1", "decimal": "1.
           "text": "abc", "exponent": "1e3", "padded": " 7 "}
 CLASSES = {"text": TEXT, "email": EMAIL, "password": PASSWORD, "number": NUMBER}
 
-OUTCOME_KEYS = ("path", "headings", "alerts", "invalid", "text")
+OUTCOME_KEYS = ("path", "headings", "alerts", "invalid", "text", "network")
+
+
+def layer_of(result: dict[str, Any]) -> str:
+    """Where a refusal happened: no API request at all -> client; an API 4xx -> server; else unknown."""
+    if result.get("value") in ("DISABLED", "NA") or not result.get("network"):
+        return "client"
+    statuses = [int(x.rsplit(" ", 1)[1]) for x in result["network"] if x.rsplit(" ", 1)[1].isdigit()]
+    if any(400 <= s < 500 for s in statuses):
+        return "server"
+    return "unknown"
 
 
 def outcome(symbol: Any, echo: str | None = None) -> dict[str, Any]:
