@@ -85,3 +85,40 @@ class CorpusMatcher:
             return None
         doc = self._end_doc[best_state]
         return Match(best, tuple(tokens[best_end - best + 1 : best_end + 1]), self._docs[doc] if doc >= 0 else "")
+
+
+def winnow(tokens: list[str], k: int = 5, window: int = 4) -> set[int]:
+    """Winnowing fingerprints (Schleimer, Wilkerson & Aiken 2003): the minimum k-gram hash of every window."""
+    import zlib
+
+    grams = [zlib.crc32(" ".join(tokens[i:i + k]).encode()) for i in range(len(tokens) - k + 1)]
+    if not grams:
+        return set()
+    if len(grams) <= window:
+        return {min(grams)}
+    return {min(grams[i:i + window]) for i in range(len(grams) - window + 1)}
+
+
+class NearMatcher:
+    """Near-verbatim detection: share of a candidate's fingerprints that come from one corpus document."""
+
+    def __init__(self, corpus: list[str], k: int = 5, window: int = 4):
+        self.k, self.window = k, window
+        self._docs = list(corpus)
+        self._index: dict[int, set[int]] = {}
+        for i, doc in enumerate(self._docs):
+            for fp in winnow(tokenize(doc), k, window):
+                self._index.setdefault(fp, set()).add(i)
+
+    def best(self, text: str) -> tuple[float, str]:
+        prints = winnow(tokenize(text), self.k, self.window)
+        if not prints:
+            return 0.0, ""
+        hits: dict[int, int] = {}
+        for fp in prints:
+            for doc in self._index.get(fp, ()):
+                hits[doc] = hits.get(doc, 0) + 1
+        if not hits:
+            return 0.0, ""
+        doc, n = max(hits.items(), key=lambda kv: kv[1])
+        return n / len(prints), self._docs[doc]

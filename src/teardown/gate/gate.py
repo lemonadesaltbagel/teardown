@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from teardown.core.ids import sha256_hex
 from teardown.core.model import ContentAddressed
-from teardown.gate.matcher import CorpusMatcher, tokenize
+from teardown.gate.matcher import CorpusMatcher, NearMatcher, tokenize
 from teardown.spec.draft import SpecDraft
 
 _WORDS_A = ["amber", "basalt", "cobalt", "delta", "ember", "fjord", "garnet", "harbor", "indigo", "juniper"]
@@ -56,6 +56,8 @@ class GateConfig(BaseModel):
     denylist: list[str] = Field(default_factory=list, description="Real names replaced by the codename.")
     quotes: list[QuoteEntry] = Field(default_factory=list)
     min_tokens: int = Field(default=4, description="Shortest verbatim token run that counts as a leak.")
+    near_threshold: float = Field(default=0.5, description="Share of a string's winnowing fingerprints from one "
+                                  "corpus passage that counts as near-verbatim (strings of 12+ words).")
 
 
 class Finding(BaseModel):
@@ -103,6 +105,7 @@ def review(draft: SpecDraft, corpus: list[str], config: GateConfig,
     """
     projection = _replace_names(draft.release_projection(), config)
     matcher = CorpusMatcher(corpus)
+    near = NearMatcher(corpus)
     ours = CorpusMatcher(supplied or [])
     quoted = [tokenize(q.text) for q in config.quotes]
     denied = [d.casefold() for d in config.denylist if d]
@@ -130,6 +133,12 @@ def review(draft: SpecDraft, corpus: list[str], config: GateConfig,
                     tokens=match.length,
                 )
             )
+        tokens = tokenize(text)
+        if len(tokens) >= 12 and not (match and match.length >= config.min_tokens):
+            share, source = near.best(text)
+            if share >= config.near_threshold and _wordy(tuple(tokens)) >= config.min_tokens:
+                add(Finding(kind="near-verbatim", location=location, text=text, matched=source[:120],
+                            tokens=round(share * 100)))
         lowered = text.casefold()
         for term in denied:
             if term in lowered:

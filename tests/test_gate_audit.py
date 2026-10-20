@@ -123,3 +123,16 @@ def test_audit_entries_are_dsse_signed(tmp_path):
     other = Signer(tmp_path / "other.pem")
     with pytest.raises(AuditChainBroken):
         log.verify({other.keyid: other.public_pem})  # signature by an unknown key
+
+
+def test_near_verbatim_copy_is_flagged_but_own_words_pass():
+    from teardown.gate.matcher import NearMatcher
+
+    manual = ("Comments are lines whose first character is a hash sign; they are ignored entirely, and blank lines "
+              "consisting only of spaces and tabs are ignored as well.")
+    near = NearMatcher([manual])
+    edited = ("Comments are lines whose first character is a hash sign; they are ignored completely, and blank lines "
+              "consisting only of spaces and tabs are skipped as well.")
+    own = "A line starting with # produces no output; so does a line that is empty or holds only whitespace."
+    assert near.best(edited)[0] >= 0.5
+    assert near.best(own)[0] < 0.2
