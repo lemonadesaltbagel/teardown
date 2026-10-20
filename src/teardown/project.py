@@ -42,6 +42,13 @@ from teardown.intake import Intake, Purpose, terms_digest, warnings_for
 from teardown.spec.draft import ModelRecord, ProbeRow, ProbeTable, SpecDraft
 
 
+class CoverageGateBlocked(PermissionError):
+    def __init__(self, feature: str, gaps: list[str]):
+        super().__init__(f"strict mode: feature {feature!r} has {len(gaps)} coverage gap(s); probe them, or release "
+                         f"with approved_by to acknowledge: {gaps[:5]}")
+        self.gaps = gaps
+
+
 class DiscoveryRecord(ContentAddressed):
     PREFIX: ClassVar[str] = "dsc"
 
@@ -113,6 +120,7 @@ class ProjectState(BaseModel):
     probes: dict[str, str] = Field(default_factory=dict, description="feature -> latest probe table id")
     rules: dict[str, str] = Field(default_factory=dict, description="feature -> latest rule table id")
     actions: dict[str, dict[str, Any]] = Field(default_factory=dict, description="named actions (invocations)")
+    coverage: dict[str, dict[str, Any]] = Field(default_factory=dict, description="feature -> last coverage report")
     target_options: dict[str, Any] = Field(default_factory=dict,
                                            description="driver options, e.g. reset_command, reset_check_url")
 
@@ -326,6 +334,15 @@ class Project:
 
     def release_spec(self, draft_id: str, approved_by: str | None = None) -> SpecRelease:
         draft = self.workspace.get(draft_id, SpecDraft)
+        state = self.state
+        if state.gate.mode is GateMode.STRICT and draft.probes is not None:
+            report = state.coverage.get(draft.feature)
+            gaps = ["coverage was never measured"] if report is None else report.get("uncovered", [])
+            if gaps and not approved_by:
+                raise CoverageGateBlocked(draft.feature, gaps)
+            if gaps:
+                self.audit.append("coverage-gaps-approved", {"draft": draft.id},
+                                  {"feature": draft.feature, "gaps": gaps, "approved_by": approved_by})
         rel = release(draft, self.workspace.corpus(), self.state.gate, self.releases_dir, approved_by=approved_by,
                       supplied=self.workspace.supplied())
         self.audit.append(
@@ -341,6 +358,35 @@ class Project:
         quotes = [*state.gate.quotes, QuoteEntry(text=text, compat_reason=compat_reason, approved_by=approved_by)]
         self._save(state.model_copy(update={"gate": state.gate.model_copy(update={"quotes": quotes})}))
         self.audit.append("quote-approved", {}, {"compat_reason": compat_reason, "approved_by": approved_by})
+
+    def approve_observed_output(self, feature: str, approved_by: str, *, flags: tuple[str, ...] = ("--help", "-h",
+                                "--version"), action_ids: list[str] | None = None,
+                                compat_reason: str = "user-required") -> list[str]:
+        """Approve the stdout of selected probes as functional quotes (byte-exact output the behavior requires,
+        e.g. help and usage text). Selection: actions whose argv contains one of ``flags``, or explicit ids."""
+        from teardown.engine.mapper import describe_symbol as parse
+        from teardown.engine.rules import RuleTable
+
+        state = self.state
+        table = self.action_table()
+        wanted = set(action_ids or []) | {k for k, a in table.items()
+                                          if any(f in (a.get("argv") or [])[1:] for f in flags)}
+        outputs: dict[str, str] = {}
+        if feature in state.probes:
+            for row in self.workspace.get(state.probes[feature], ProbeTable).rows:
+                if row.action in wanted:
+                    outputs[row.action] = row.expect
+        if feature in state.rules:
+            for rule in self.workspace.get(state.rules[feature], RuleTable).rules:
+                for c in rule.checks:
+                    for aid, sym in ((c.a, c.observed_a), (c.b, c.observed_b)):
+                        if aid in wanted and sym:
+                            outputs[aid] = sym
+        texts = sorted({out["stdout"] for out in map(parse, outputs.values())
+                        if isinstance(out, dict) and isinstance(out.get("stdout"), str) and out["stdout"].strip()})
+        for text in texts:
+            self.add_quote(text, compat_reason, approved_by)
+        return texts
 
     # -- CLI probing -------------------------------------------------------------------------------------------
     def max_workers(self, requested: int) -> int:
@@ -492,6 +538,8 @@ class Project:
         counts = {item: sum(any(exercises(a, pat) for pat in patterns) for a in actions)
                   for item, patterns in items.items()}
         uncovered = sorted(i for i, n in counts.items() if n == 0)
+        self._save(self.state.model_copy(update={"coverage": {**self.state.coverage, feature: {
+            "items": len(items), "uncovered": uncovered}}}))
         if record_unknowns:
             for item in uncovered:
                 self.ledger.record_unknown(feature, f"not exercised by any probe or rule: {item}",
@@ -561,7 +609,8 @@ class Project:
             "feature": feature, "rules": len(records), "corroborated": sum(r.status == "corroborated" for r in records),
             "falsified": sum(r.status == "falsified" for r in records), "conflicts": len(conflicts)})
         return {"table": table.id, "rules": [{"statement": r.statement, "status": r.status,
-                                              "failed_checks": [i for i, c in enumerate(r.checks) if not c.holds]}
+                                              "failed_checks": [i for i, c in enumerate(r.checks) if not c.holds],
+                                              "suggestions": R.suggest(r) if r.status != "corroborated" else []}
                                              for r in records]}
 
     # -- web field probing -------------------------------------------------------------------------------------

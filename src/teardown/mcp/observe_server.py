@@ -173,6 +173,12 @@ def build_observe_server(project: Project) -> MCPServer:
         project.add_quote(text, compat_reason, approved_by)
         return {"quotes": len(project.state.gate.quotes)}
 
+    @server.tool(description="Approve byte-exact output the behavior requires (default: help/usage/version output) "
+                 "as functional quotes, so the gate lets it through. Records who approved it.")
+    def approve_observed_output(feature: str, approved_by: str, action_ids: list[str] | None = None) -> dict[str, Any]:
+        texts = project.approve_observed_output(feature, approved_by, action_ids=action_ids)
+        return {"approved": len(texts)}
+
     @server.tool(description="List questions from the clean side.")
     def list_tickets() -> list[dict[str, Any]]:
         return project.tickets()

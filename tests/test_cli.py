@@ -277,3 +277,80 @@ def test_crash_trace_never_reaches_evidence(tmp_path):
         assert obs["exit"] == 1 and "hidden" not in obs["stderr"] and "redacted" in obs["stderr"]
     finally:
         runner.close()
+
+
+def test_help_output_can_be_approved_as_a_functional_quote(tmp_path):
+    import base64
+
+    project = Project(tmp_path / "p")
+    project.open_target("cli:local", purpose="research")
+    usage = "Usage: frobnicate the quantum flux capacitor with extreme prejudice and care"
+    encoded = base64.b64encode(usage.encode()).decode()  # the tool's output must not be our own argv text
+    program = f"import base64; print(base64.b64decode({encoded!r}).decode())"
+    project.check_rules(
+        "tool",
+        [
+            {
+                "statement": "Help is printed.",
+                "checks": [
+                    {"kind": "outcome", "a": {"argv": ["python3", "-c", program, "--help"]}, "expect": {"exit": 0}}
+                ],
+            }
+        ],
+    )
+    _, report = project.review_spec(project.compile_spec("tool").id)
+    assert any(f.kind == "verbatim" for f in report.findings)
+    assert project.approve_observed_output("tool", approved_by="reviewer") == [usage + "\n"]
+    _, report = project.review_spec(project.compile_spec("tool").id)
+    assert not report.findings
+
+
+def test_strict_mode_blocks_release_until_coverage_is_measured_or_gaps_acknowledged(tmp_path):
+    from teardown.project import CoverageGateBlocked
+
+    project = Project(tmp_path / "p")
+    project.open_target("cli:local", purpose="substitute", strict=True)
+    project.probe_cli(
+        "sort",
+        {
+            "cmd": "sort",
+            "base": [],
+            "default_input": "dups",
+            "sweep_inputs": ["dups"],
+            "inputs": ["dups"],
+            "pair_inputs": [],
+            "stdio_modes": False,
+        },
+        workers=2,
+        env_sample=5,
+        pairwise=False,
+    )
+    draft = project.compile_spec("sort")
+    with pytest.raises(CoverageGateBlocked):
+        project.release_spec(draft.id)
+    project.coverage("sort", {"made-up feature": ["--frobnicate"]})
+    with pytest.raises(CoverageGateBlocked) as blocked:
+        project.release_spec(draft.id)
+    assert "made-up feature" in blocked.value.gaps
+    project.release_spec(draft.id, approved_by="reviewer")  # a human acknowledges the gaps
+    kinds = [e["statement"]["predicateType"].split("/")[-2] for e in project.audit.entries()]
+    assert "coverage-gaps-approved" in kinds and kinds[-1] == "spec-release"
+
+
+def test_falsified_rules_come_with_rewrite_suggestions(tmp_path):
+    project = Project(tmp_path / "p")
+    project.open_target("cli:local", purpose="research")
+    result = project.check_rules(
+        "sort",
+        [
+            {
+                "statement": "Sort uppercases its output.",
+                "checks": [
+                    {"kind": "outcome", "a": {"argv": ["sort"], "stdin": "b\na\n"}, "expect": {"stdout": "A\nB\n"}}
+                ],
+            }
+        ],
+        workers=1,
+    )
+    rule = result["rules"][0]
+    assert rule["status"] == "falsified" and "a\\nb\\n" in rule["suggestions"][0]

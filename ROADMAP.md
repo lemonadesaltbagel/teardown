@@ -75,9 +75,12 @@ novel tool with an independent observer agent: **spec arm 397/397**, hybrid (spe
 - [x] Docs ingestion (gate corpus) and documentation/behavior conflicts as unknowns.
 - [x] Observer guide (`docs/observer-guide.md`) for observer agents.
 - [x] Re-run the novel benchmark: done (round 2).
-- [ ] Coverage gate that *blocks* release in strict mode when inventory items are uncovered.
-- [ ] Rule-authoring loop: propose a rewrite for falsified rules from the failing checks' observed symbols.
-- [ ] Explicit gate decision for byte-exact prose required by behavior (help/usage text): approve as quote or drop.
+- [x] Coverage gate that *blocks* release in strict mode when inventory items are uncovered (or coverage was never
+  measured), unless a named human acknowledges the gaps (audited).
+- [x] Rule-authoring loop: falsified rules come back with concrete rewrite suggestions from the observed symbols.
+- [x] Explicit gate decision for byte-exact prose required by behavior: `approve_observed_output` approves help/
+  usage/version output as functional quotes (compat_reason user-required, approver recorded). User decision
+  2026-10-20: approve as functional quote; applied to the round-2 release.
 - [ ] More rounds (more tools, other domains, several runs) for variance; observer effort/quality as a variable.
 
 ## Phase 2: web (L)

@@ -121,3 +121,26 @@ def status_of(results: list[CheckResult]) -> str:
     if held == len(results):
         return "corroborated"
     return "falsified" if held == 0 else "contested"
+
+
+def suggest(record: RuleRecord) -> list[str]:
+    """Concrete rewrites for failing checks, from what the original actually did (for the observer to adopt)."""
+    out = []
+    for i, c in enumerate(record.checks):
+        if c.holds:
+            continue
+        if c.kind == "outcome":
+            observed = describe_symbol(c.observed_a)
+            expected = json.loads(c.expect or "{}")
+            actual = {k: observed.get(k) for k in expected} if isinstance(observed, dict) else observed
+            out.append(f"check {i}: expected {expected} but the original gives {actual}")
+        else:
+            a, b = projection(c.observed_a, c.keys), projection(c.observed_b or "", c.keys)
+            if isinstance(a, dict) and isinstance(b, dict):
+                differing = sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
+                detail = f"they differ on {differing}" if differing else "they are identical"
+            else:
+                detail = "they differ" if a != b else "they are identical"
+            flip = "differs" if c.kind == "same" else "same"
+            out.append(f"check {i}: '{c.kind}' does not hold ({detail}); consider '{flip}' or narrowing keys")
+    return out

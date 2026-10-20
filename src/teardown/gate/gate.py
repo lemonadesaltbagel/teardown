@@ -134,7 +134,8 @@ def review(draft: SpecDraft, corpus: list[str], config: GateConfig,
                 )
             )
         tokens = tokenize(text)
-        if len(tokens) >= 12 and not (match and match.length >= config.min_tokens):
+        exact_hit = match is not None and match.length >= config.min_tokens
+        if len(tokens) >= 12 and not exact_hit and not _mostly_quoted(tokens, quoted):
             share, source = near.best(text)
             if share >= config.near_threshold and _wordy(tuple(tokens)) >= config.min_tokens:
                 add(Finding(kind="near-verbatim", location=location, text=text, matched=source[:120],
@@ -208,6 +209,11 @@ def _string_leaves(value: Any, path: str = "$"):
     elif isinstance(value, list):
         for i, v in enumerate(value):
             yield from _string_leaves(v, f"{path}[{i}]")
+
+
+def _mostly_quoted(tokens: list[str], quoted: list[list[str]], share: float = 0.8) -> bool:
+    words = set(tokens)
+    return any(len(words & set(q)) >= share * len(words) for q in quoted) if words else False
 
 
 def _wordy(tokens: tuple[str, ...]) -> int:
