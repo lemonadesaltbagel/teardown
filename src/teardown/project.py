@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from teardown.audit.log import AuditLog
-from teardown.core.model import MapperRule, MapperVersion
+from teardown.core.model import ContentAddressed, MapperRule, MapperVersion
 from teardown.core.store import Workspace
 from teardown.drivers.base import Driver
 from teardown.drivers.fake import open_fake
@@ -29,13 +29,45 @@ from teardown.engine.mapper import Mapper
 from teardown.gate.gate import GateConfig, GateMode, QuoteEntry, SpecRelease, make_codename, release, review
 from teardown.gate.verifier import Verifier
 from teardown.intake import Intake, Purpose, terms_digest, warnings_for
-from teardown.spec.draft import ModelRecord, SpecDraft
+from teardown.spec.draft import ModelRecord, ProbeRow, ProbeTable, SpecDraft
 
 
-def open_driver(target_spec: str) -> Driver:
+class DiscoveryRecord(ContentAddressed):
+    PREFIX: ClassVar[str] = "dsc"
+
+    cmd: str
+    target: str
+    data: dict[str, Any]
+
+
+def _flatten(value: Any):
+    if isinstance(value, dict):
+        for k, v in value.items():
+            yield k
+            yield from _flatten(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _flatten(v)
+    elif isinstance(value, str):
+        yield value
+
+
+def open_driver(target_spec: str, actions: dict[str, dict[str, Any]] | None = None) -> Driver:
     if target_spec.startswith("fake:"):
         return open_fake(target_spec)
-    raise ValueError(f"no driver for {target_spec!r} yet (Phase 0 ships the fake driver; CLI and web come next)")
+    if target_spec.startswith("cli:"):
+        from teardown.drivers.cli.driver import CliDriver
+        from teardown.drivers.cli.invocation import Invocation
+
+        table = {k: Invocation.model_validate(v) for k, v in (actions or {}).items()}
+        return CliDriver(target_spec, actions=table)
+    raise ValueError(f"no driver for {target_spec!r} yet (fake: and cli: are available)")
+
+
+def default_mapper(target_spec: str, target: str) -> MapperVersion:
+    if target_spec.startswith("cli:"):
+        return MapperVersion(target=target, builtin="cli.behavior/v1", note="CLI behavior-level abstraction")
+    return MapperVersion(target=target, note="identity mapper (no rules yet)")
 
 
 class ProjectState(BaseModel):
@@ -47,6 +79,8 @@ class ProjectState(BaseModel):
     mapper: str
     gate: GateConfig
     models: dict[str, str] = Field(default_factory=dict, description="feature -> latest model record id")
+    probes: dict[str, str] = Field(default_factory=dict, description="feature -> latest probe table id")
+    actions: dict[str, dict[str, Any]] = Field(default_factory=dict, description="named actions (invocations)")
 
 
 class Project:
@@ -94,7 +128,7 @@ class Project:
             max_actions_per_second=max_actions_per_second,
         )
         self.workspace.put(intake)
-        mapper = MapperVersion(target=target, note="identity mapper (no rules yet)")
+        mapper = default_mapper(target_spec, target)
         self.workspace.put(mapper)
         gate = GateConfig(
             mode=GateMode.STRICT if strict else GateMode.STANDARD,
@@ -114,8 +148,11 @@ class Project:
 
     def set_mapper(self, rules: list[MapperRule | dict[str, Any]], note: str = "") -> MapperVersion:
         state = self.state
+        current = self.workspace.get(state.mapper, MapperVersion)
         version = MapperVersion(
             target=state.target,
+            builtin=current.builtin,
+            params=current.params,
             rules=[r if isinstance(r, MapperRule) else MapperRule.model_validate(r) for r in rules],
             parent=state.mapper,
             note=note,
@@ -123,10 +160,30 @@ class Project:
         self.workspace.put(version)
         self._save(state.model_copy(update={"mapper": version.id}))
         self.audit.append("mapper-version", {"mapper": version.id}, {"parent": state.mapper, "rules": len(rules)})
+        self._reset_session()
+        return version
+
+    def action_table(self) -> dict[str, dict[str, Any]]:
+        """Named actions plus every probe of every probe table (claims and tests refer to probes by id)."""
+        state = self.state
+        table = dict(state.actions)
+        for table_id in state.probes.values():
+            table.update(self.workspace.get(table_id, ProbeTable).actions)
+        return table
+
+    def define_actions(self, actions: dict[str, dict[str, Any]]) -> None:
+        from teardown.drivers.cli.invocation import Invocation
+
+        validated = {k: Invocation.model_validate(v).model_dump(mode="json") for k, v in actions.items()}
+        state = self.state
+        self._save(state.model_copy(update={"actions": {**state.actions, **validated}}))
+        self.workspace.add_supplied([str(x) for v in validated.values() for x in _flatten(v)])
+        self._reset_session()
+
+    def _reset_session(self) -> None:
         if self._session:
             self._session.close()
             self._session = None
-        return version
 
     def mapper(self) -> Mapper:
         return Mapper(self.workspace.get(self.state.mapper, MapperVersion))
@@ -137,7 +194,7 @@ class Project:
             intake = self.workspace.get(state.intake, Intake)
             self._session = ObservationSession(
                 self.workspace,
-                open_driver(state.target_spec),
+                open_driver(state.target_spec, self.action_table()),
                 self.mapper(),
                 max_actions_per_second=intake.max_actions_per_second,
             )
@@ -186,16 +243,21 @@ class Project:
 
     def compile_spec(self, feature: str) -> SpecDraft:
         state = self.state
-        if feature not in state.models:
-            raise KeyError(f"no model learned for feature {feature!r}")
-        record = self.workspace.get(state.models[feature], ModelRecord)
+        if feature not in state.models and feature not in state.probes:
+            raise KeyError(f"nothing learned or probed for feature {feature!r}")
+        record = self.workspace.get(state.models[feature], ModelRecord) if feature in state.models else None
+        probes = self.workspace.get(state.probes[feature], ProbeTable) if feature in state.probes else None
+        version = self.workspace.get(state.mapper, MapperVersion)
+        abstraction = {"builtin": version.builtin, "params": version.params} if version.builtin else {}
         claims = [c for c in self.ledger.all().values() if c.identity.feature == feature]
         unknowns = [u for u in self.ledger.unknowns().values() if u.identity.feature == feature]
         draft = SpecDraft(
             feature=feature,
             target=state.target,
-            mapper=record.mapper,
+            mapper=record.mapper if record else probes.mapper,
+            abstraction=abstraction,
             model=record,
+            probes=probes,
             claims=sorted(claims, key=lambda c: c.id),
             unknowns=sorted(unknowns, key=lambda u: u.id),
         )
@@ -204,11 +266,12 @@ class Project:
 
     def review_spec(self, draft_id: str):
         draft = self.workspace.get(draft_id, SpecDraft)
-        return review(draft, self.workspace.corpus(), self.state.gate)
+        return review(draft, self.workspace.corpus(), self.state.gate, self.workspace.supplied())
 
     def release_spec(self, draft_id: str, approved_by: str | None = None) -> SpecRelease:
         draft = self.workspace.get(draft_id, SpecDraft)
-        rel = release(draft, self.workspace.corpus(), self.state.gate, self.releases_dir, approved_by=approved_by)
+        rel = release(draft, self.workspace.corpus(), self.state.gate, self.releases_dir, approved_by=approved_by,
+                      supplied=self.workspace.supplied())
         self.audit.append(
             "spec-release",
             {"release": rel.id, "draft": draft.id},
@@ -223,17 +286,104 @@ class Project:
         self._save(state.model_copy(update={"gate": state.gate.model_copy(update={"quotes": quotes})}))
         self.audit.append("quote-approved", {}, {"compat_reason": compat_reason, "approved_by": approved_by})
 
+    # -- CLI probing -------------------------------------------------------------------------------------------
+    def _worker_session(self) -> ObservationSession:
+        state = self.state
+        return ObservationSession(self.workspace, open_driver(state.target_spec, self.action_table()), self.mapper())
+
+    def _execute_raw(self, probes: list) -> list[dict[str, Any]]:
+        from teardown.engine.probing import run_probes
+
+        return [r.observation for r in run_probes(self._worker_session, probes, workers=4)]
+
+    def discover_cli(self, cmd: str, takes_files: bool = True) -> dict[str, Any]:
+        """Interface structure from help + behavior. Help prose stays in evidence; only structure is kept here."""
+        from teardown.drivers.cli.discover import discover
+
+        found = discover(self._execute_raw, cmd, takes_files=takes_files)
+        found.pop("_help_text", None)
+        record = DiscoveryRecord(cmd=cmd, target=self.state.target, data=found)
+        self.workspace.put(record)
+        summary = {"cmd": cmd, "options": len(found["model"]["options"]),
+                   "findings": {k: len(v) for k, v in found["findings"].items()}}
+        self.audit.append("cli-discovery", {"discovery": record.id}, summary)
+        return {"discovery": record.id, **found}
+
+    def probe_cli(self, feature: str, hints: dict[str, Any], *, discovery: dict[str, Any] | None = None,
+                  workers: int = 4, pairwise: bool = True, env_sample: int = 200) -> dict[str, Any]:
+        from teardown.drivers.cli.plan import ProbeHints, accepted_classes, plan_pairwise, plan_sweep
+        from teardown.engine.mapper import describe_symbol
+        from teardown.engine.mining import mine
+        from teardown.engine.noise import calibrate
+        from teardown.engine.probing import run_probes
+
+        h = ProbeHints.model_validate(hints)
+        found = discovery or self.discover_cli(h.cmd, takes_files=h.takes_files)
+        model = found["model"]
+        sweep = plan_sweep(model, h)
+        results = run_probes(self._worker_session, sweep, workers=workers)
+        accepted = accepted_classes(sweep, [describe_symbol(r.symbol) for r in results])
+        probes = list(sweep)
+        if pairwise:
+            extra = [p for p in plan_pairwise(model, h, accepted) if p.id not in {q.id for q in probes}]
+            results += run_probes(self._worker_session, extra, workers=workers)
+            probes += extra
+        noise = calibrate(self._worker_session, probes, results, env_sample=env_sample, workers=workers)
+        nondet = set(noise.nondeterministic)
+        table = ProbeTable(
+            feature=feature,
+            target=self.state.target,
+            mapper=self.state.mapper,
+            actions={r.probe.id: r.probe.invocation.model_dump(mode="json") for r in results},
+            rows=[ProbeRow(action=r.probe.id, expect=r.symbol, tags=r.probe.tags) for r in results
+                  if r.probe.id not in nondet],
+            excluded={pid: "nondeterministic" for pid in sorted(nondet)},
+            discovery={k: v for k, v in found.items() if k in ("cmd", "model", "minimal", "findings")},
+        )
+        mined, mixed = mine(feature, h.cmd, results, exclude=nondet)
+        table = table.model_copy(update={"mixed": mixed, "id": ""})
+        table = ProbeTable.model_validate(table.model_dump(exclude={"id"}))
+        self.workspace.put(table)
+        state = self.state
+        self._save(state.model_copy(update={"probes": {**state.probes, feature: table.id}}))
+        self._reset_session()
+        evidence = {r.probe.id: r.evidence for r in results}
+        for m in mined:
+            first, *rest = m.checks
+            claim = self.propose_claim(feature=feature, kind=m.kind, statement=m.statement, inputs=first.inputs,
+                                       expect=first.expect, match="subset", cases=rest)
+            self.ledger.record_batch(claim.id, 2 * len(m.checks), [evidence[c.inputs[0]] for c in m.checks])
+        for var, ids in noise.env_dependent.items():
+            self.ledger.record_unknown(feature, f"{len(ids)} sampled probe(s) behave differently when {var} changes",
+                                       [f"specify the {var}-dependent behavior", "probe it across more values"])
+        for row in mixed:
+            self.ledger.record_unknown(feature, f"value class '{row['class']}' of {row['factor']} has mixed outcomes",
+                                       ["partition this class further", "check for interaction with other inputs"])
+        if nondet:
+            self.ledger.record_unknown(feature, f"{len(nondet)} probe(s) are nondeterministic and were excluded",
+                                       ["mask the varying part of the output", "state a partial-order claim"])
+        self.audit.append("probe-table", {"table": table.id}, {
+            "feature": feature, "probes": len(results), "rows": len(table.rows), "nondeterministic": len(nondet),
+            "env_dependent": {k: len(v) for k, v in noise.env_dependent.items()}, "claims": len(mined),
+            "mixed": len(mixed)})
+        return {"table": table.id, "probes": len(results), "rows": len(table.rows), "claims": len(mined),
+                "mixed": len(mixed), "noise": noise.model_dump(mode="json"), "accepted": accepted}
+
     # -- clean-side channels -----------------------------------------------------------------------------------
     def verifier(self) -> Verifier:
-        def open_original() -> ObservationSession:
-            return ObservationSession(self.workspace, open_driver(self.state.target_spec), self.mapper())
+        def open_original(rel: SpecRelease) -> ObservationSession:
+            return ObservationSession(self.workspace, open_driver(self.state.target_spec, self.action_table()),
+                                      self.mapper())
 
-        def open_clone(clone_target: str) -> ObservationSession:
-            driver = open_driver(clone_target)
-            # The clone's observations are expected to be abstract already (testability contract), so its mapper
-            # is the identity. Its evidence goes to a scratch workspace: clone output is clean-side data.
-            scratch = Workspace(self.root / "clone-runs")
-            return ObservationSession(scratch, driver, Mapper(MapperVersion(target=driver.target_fingerprint())))
+        def open_clone(clone_target: str, rel: SpecRelease) -> ObservationSession:
+            driver = open_driver(clone_target, rel.spec.get("actions") or {})
+            # Built-in abstractions (e.g. CLI behavior) are public and applied to the clone too. Rule-based mappers
+            # stay dirty-side: the clone must expose abstract observations itself (testability contract). Clone
+            # evidence goes to a scratch workspace: clone output is clean-side data.
+            abstraction = rel.spec.get("abstraction") or {}
+            version = MapperVersion(target=driver.target_fingerprint(), builtin=abstraction.get("builtin"),
+                                    params=abstraction.get("params") or {})
+            return ObservationSession(Workspace(self.root / "clone-runs"), driver, Mapper(version))
 
         return Verifier(
             releases_dir=self.releases_dir,

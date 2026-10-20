@@ -18,6 +18,7 @@ from teardown.core.model import (
 )
 from teardown.core.store import Workspace
 from teardown.drivers.session import ObservationSession
+from teardown.engine.mapper import symbol_matches
 
 
 class ClaimLedger:
@@ -39,12 +40,15 @@ class ClaimLedger:
         strictness: Strictness | str = Strictness.MUST,
         origin: Origin | str = Origin.OBSERVED,
         layer: Layer | str = Layer.UNKNOWN,
+        match: str = "exact",
+        cases: list[TraceCheck] | None = None,
     ) -> Claim:
         identity = ClaimIdentity(
             feature=feature,
             kind=ClaimKind(kind),
             statement=statement,
-            check=TraceCheck(inputs=inputs, expect=expect),
+            check=TraceCheck(inputs=inputs, expect=expect, match=match),
+            cases=list(cases or []),
             strictness=Strictness(strictness),
             origin=Origin(origin),
             layer=Layer(layer),
@@ -63,20 +67,21 @@ class ClaimLedger:
         """Re-run the claim's check ``repeats`` times on fresh resets (no cache) and update its counts."""
         claims = self.workspace.load_claims()
         claim = claims[claim_id]
-        check = claim.identity.check
         if session.mapper.id != claim.identity.mapper:
             raise ValueError("claim was stated under a different mapper version; re-state it first")
         for _ in range(repeats):
-            outputs, evidence, _ = session.run(check.inputs, use_cache=False)
-            claim.probes += 1
-            claim.evidence.extend(evidence[-1:])
-            mismatch = [o if e is not None and o != e else None for o, e in zip(outputs, check.expect, strict=True)]
-            if any(m is not None for m in mismatch):
-                claim.contradicting += 1
-                if mismatch not in claim.counterexamples:
-                    claim.counterexamples.append(mismatch)
-            else:
-                claim.confirming += 1
+            for check in claim.identity.all_checks():
+                outputs, evidence, _ = session.run(check.inputs, use_cache=False)
+                claim.probes += 1
+                claim.evidence.extend(evidence[-1:])
+                mismatch = [None if symbol_matches(o, e, check.match) else o
+                            for o, e in zip(outputs, check.expect, strict=True)]
+                if any(m is not None for m in mismatch):
+                    claim.contradicting += 1
+                    if mismatch not in claim.counterexamples:
+                        claim.counterexamples.append(mismatch)
+                else:
+                    claim.confirming += 1
         claim.status = _status(claim)
         claims[claim.id] = claim
         self.workspace.save_claims(claims)
@@ -91,6 +96,21 @@ class ClaimLedger:
                 "violation_upper_bound_95": round(violation_upper_bound(claim.confirming, claim.contradicting), 4),
             },
         )
+        return claim
+
+    def record_batch(self, claim_id: str, confirming: int, evidence: list[str]) -> Claim:
+        """Credit observations already made by a probe batch (each case was run in the batch and its rerun)."""
+        claims = self.workspace.load_claims()
+        claim = claims[claim_id]
+        claim.probes += confirming
+        claim.confirming += confirming
+        claim.evidence.extend(evidence)
+        claim.status = _status(claim)
+        claims[claim.id] = claim
+        self.workspace.save_claims(claims)
+        self.audit.append("claim-probed", {"claim": claim.id},
+                          {"status": claim.status, "probes": claim.probes, "confirming": claim.confirming,
+                           "contradicting": claim.contradicting, "source": "probe-batch"})
         return claim
 
     def all(self) -> dict[str, Claim]:

@@ -94,10 +94,16 @@ class ReleaseBlocked(PermissionError):
         self.report = report
 
 
-def review(draft: SpecDraft, corpus: list[str], config: GateConfig) -> tuple[dict[str, Any], GateReport]:
-    """Return the sanitized projection and the gate report (nothing is written)."""
+def review(draft: SpecDraft, corpus: list[str], config: GateConfig,
+           supplied: list[str] | None = None) -> tuple[dict[str, Any], GateReport]:
+    """Return the sanitized projection and the gate report (nothing is written).
+
+    ``supplied`` is text Teardown fed to the target itself (probe inputs); a verbatim run that also occurs there
+    is the target echoing our input, not the target's expression.
+    """
     projection = _replace_names(draft.release_projection(), config)
     matcher = CorpusMatcher(corpus)
+    ours = CorpusMatcher(supplied or [])
     quoted = [tokenize(q.text) for q in config.quotes]
     denied = [d.casefold() for d in config.denylist if d]
     found: dict[tuple[str, str], Finding] = {}
@@ -111,7 +117,10 @@ def review(draft: SpecDraft, corpus: list[str], config: GateConfig) -> tuple[dic
 
     for location, text in _string_leaves(projection):
         match = matcher.longest(text)
-        if match and match.length >= config.min_tokens and not _covered(list(match.query_tokens), quoted):
+        echoed = match is not None and (own := ours.longest(" ".join(match.query_tokens))) is not None and (
+            own.length >= match.length)
+        if match and match.length >= config.min_tokens and not echoed and not _covered(
+                list(match.query_tokens), quoted):
             add(
                 Finding(
                     kind="verbatim",
@@ -137,8 +146,9 @@ def release(
     releases_dir: Path,
     *,
     approved_by: str | None = None,
+    supplied: list[str] | None = None,
 ) -> SpecRelease:
-    projection, report = review(draft, corpus, config)
+    projection, report = review(draft, corpus, config, supplied)
     if report.blocked:
         if not approved_by:
             raise ReleaseBlocked(report)

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TypeVar
@@ -44,9 +45,14 @@ class Workspace:
         self._packs: dict[str, _Pack] = {}
         self._blobs = _Pack(self.root / "packs" / "blobs.jsonl")
         self._corpus_seen: set[str] | None = None
+        self._lock = threading.RLock()
 
     # -- immutable objects -------------------------------------------------------------------------------------
     def put(self, record: ContentAddressed) -> str:
+        with self._lock:
+            return self._put(record)
+
+    def _put(self, record: ContentAddressed) -> str:
         if record.PREFIX in PACKED_PREFIXES:
             pack = self._pack(record.PREFIX)
             if record.id not in pack:
@@ -68,6 +74,10 @@ class Workspace:
         return record.id
 
     def get(self, record_id: str, cls: type[T]) -> T:
+        with self._lock:
+            return self._get(record_id, cls)
+
+    def _get(self, record_id: str, cls: type[T]) -> T:
         prefix = self._prefix(record_id)
         if prefix in PACKED_PREFIXES:
             line = self._pack(prefix).get(record_id)
@@ -128,6 +138,25 @@ class Workspace:
         with (self.root / "corpus" / "strings.jsonl").open("a", encoding="utf-8") as fh:
             for s in new:
                 fh.write(json.dumps({"evidence": evidence.id, "text": s}, ensure_ascii=False) + "\n")
+
+    def add_supplied(self, strings: list[str]) -> None:
+        """Text Teardown itself fed to the target (probe inputs, argv). The gate does not count it as leaked."""
+        with self._lock:
+            path = self.root / "corpus" / "supplied.jsonl"
+            if not hasattr(self, "_supplied_seen"):
+                self._supplied_seen = set(self.supplied())
+            new = sorted({s for s in strings if s.strip()} - self._supplied_seen)
+            if new:
+                self._supplied_seen.update(new)
+                with path.open("a", encoding="utf-8") as fh:
+                    for text in new:
+                        fh.write(json.dumps({"text": text}, ensure_ascii=False) + "\n")
+
+    def supplied(self) -> list[str]:
+        path = self.root / "corpus" / "supplied.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(line)["text"] for line in path.read_text(encoding="utf-8").splitlines()]
 
     def corpus(self) -> list[str]:
         path = self.root / "corpus" / "strings.jsonl"

@@ -9,7 +9,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-_TOKEN = re.compile(r"\w+|[^\w\s]", re.UNICODE)
+# Hyphenated words and option names (--only-delimited) are one token each: they are single interface names.
+_TOKEN = re.compile(r"-{0,2}\w+(?:-\w+)*|[^\w\s]", re.UNICODE)
 
 
 def tokenize(text: str) -> list[str]:

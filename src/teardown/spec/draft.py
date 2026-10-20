@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from teardown.core.model import Claim, ContentAddressed, Unknown
 from teardown.spec.efsm import EFSM
@@ -20,6 +20,35 @@ TESTABILITY_CONTRACT = (
     "output definitions in `model.outputs` (keys and class values exactly as given). Inputs not offered in a state "
     "must be reported as unavailable ('NA'). Wording, layout and visual design are yours to choose."
 )
+CLI_TESTABILITY_CONTRACT = (
+    "The implementation must be installed so that the command names used in `actions` resolve on PATH. Each "
+    "action is run in a fresh working directory containing the listed files. Conformance compares the behavior "
+    "abstraction in `abstraction` only: exit status, stdout bytes, whether a diagnostic is written to stderr (and "
+    "its errno class), and file-system effects. Diagnostic wording is yours to choose."
+)
+
+
+class ProbeRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str
+    expect: str
+    tags: list[str] = Field(default_factory=list)
+
+
+class ProbeTable(ContentAddressed):
+    """A batch of single-invocation probes with their behavior symbols (the CLI golden table)."""
+
+    PREFIX: ClassVar[str] = "ptb"
+
+    feature: str
+    target: str
+    mapper: str
+    actions: dict[str, dict[str, Any]]
+    rows: list[ProbeRow]
+    excluded: dict[str, str] = Field(default_factory=dict, description="probe id -> reason (noise, env)")
+    discovery: dict[str, Any] = Field(default_factory=dict, description="Interface structure (no prose).")
+    mixed: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ModelRecord(ContentAddressed):
@@ -40,26 +69,38 @@ class SpecDraft(ContentAddressed):
     feature: str
     target: str
     mapper: str
-    model: ModelRecord
+    abstraction: dict[str, Any] = Field(default_factory=dict, description="Releasable built-in abstraction.")
+    model: ModelRecord | None = None
+    probes: ProbeTable | None = None
     claims: list[Claim] = Field(default_factory=list)
     unknowns: list[Unknown] = Field(default_factory=list)
 
     def release_projection(self) -> dict[str, Any]:
-        model = self.model.model
+        model = self.model.model if self.model else None
+        actions: dict[str, Any] = {}
+        if self.probes:
+            used = {r.action for r in self.probes.rows}
+            used |= {a for c in self.claims for check in c.identity.all_checks() for a in check.inputs}
+            actions = {k: v for k, v in sorted(self.probes.actions.items()) if k in used}
         return {
             "feature": self.feature,
             "vocabulary": self.mapper,
-            "testability_contract": TESTABILITY_CONTRACT,
-            "completeness": self.model.completeness,
-            "model": model.model_dump(mode="json"),
-            "requirements": to_ears(model),
-            "xstate": to_xstate(model),
+            "abstraction": self.abstraction,
+            "testability_contract": CLI_TESTABILITY_CONTRACT if self.probes else TESTABILITY_CONTRACT,
+            "completeness": self.model.completeness if self.model else "probe table only (no state model learned)",
+            "model": model.model_dump(mode="json") if model else None,
+            "requirements": to_ears(model) if model else [],
+            "xstate": to_xstate(model) if model else None,
+            "interface": _interface(self.probes.discovery) if self.probes else None,
+            "actions": actions,
+            "probe_table": [r.model_dump(mode="json") for r in self.probes.rows] if self.probes else [],
             "claims": [
                 {
                     "id": c.id,
                     "kind": c.identity.kind,
                     "statement": c.identity.statement,
                     "check": c.identity.check.model_dump(mode="json"),
+                    "cases": [k.model_dump(mode="json") for k in c.identity.cases],
                     "strictness": c.identity.strictness,
                     "origin": c.identity.origin,
                     "layer": c.identity.layer,
@@ -75,3 +116,18 @@ class SpecDraft(ContentAddressed):
                 for u in self.unknowns
             ],
         }
+
+
+def _interface(discovery: dict[str, Any]) -> dict[str, Any] | None:
+    """Releasable interface structure: option names, arity and value types only (never help prose)."""
+    model = discovery.get("model")
+    if not model:
+        return None
+    return {
+        "command": discovery.get("cmd"),
+        "options": {k: {"names": o["names"], "arity": o["arity"], "type": o["type"],
+                        "undocumented": bool(o.get("undocumented"))}
+                    for k, o in sorted(model["options"].items()) if not o.get("phantom")},
+        "operands": model.get("usage_forms", []),
+        "findings": discovery.get("findings", {}),
+    }

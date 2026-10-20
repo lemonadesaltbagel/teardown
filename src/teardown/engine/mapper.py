@@ -18,6 +18,7 @@ from typing import Any
 
 from teardown.core.ids import canonical_json
 from teardown.core.model import MapperRule, MapperVersion
+from teardown.engine.abstractions import BUILTINS
 
 NOT_AVAILABLE = "NA"
 
@@ -29,6 +30,9 @@ class Mapper:
             (rule, [(re.compile(rx), cls) for rx, cls in rule.classes]) for rule in version.rules
         ]
         self._cache: dict[bytes, str] = {}
+        if version.builtin is not None and version.builtin not in BUILTINS:
+            raise ValueError(f"unknown built-in abstraction {version.builtin!r}; known: {sorted(BUILTINS)}")
+        self._builtin = BUILTINS.get(version.builtin) if version.builtin else None
 
     @property
     def id(self) -> str:
@@ -39,6 +43,10 @@ class Mapper:
         if observation is None or isinstance(observation, str):
             return observation if observation is not None else NOT_AVAILABLE
         value = copy.deepcopy(observation)
+        if self._builtin is not None:
+            value = self._builtin(value, self.version.params)
+            if not isinstance(value, dict):
+                return value
         for rule, classes in self._compiled:
             _apply(value, rule.path.split("."), rule, classes)
         return value
@@ -91,3 +99,15 @@ def _classify(value: Any, classes, default: str | None) -> Any:
         if rx.search(text):
             return cls
     return default if default is not None else "<unclassified>"
+
+
+def symbol_matches(observed: str, expected: str | None, match: str = "exact") -> bool:
+    """Exact symbol equality, or (match="subset") every key of the expected object equals the observed one's."""
+    if expected is None:
+        return True
+    if match == "exact":
+        return observed == expected
+    want, got = describe_symbol(expected), describe_symbol(observed)
+    if not isinstance(want, dict) or not isinstance(got, dict):
+        return observed == expected
+    return all(k in got and got[k] == v for k, v in want.items())

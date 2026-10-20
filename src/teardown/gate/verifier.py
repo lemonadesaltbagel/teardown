@@ -1,9 +1,12 @@
 """verify_against_original: run the released conformance suite on the original and on a clone, return symbols only.
 
+The suite is (a) one test per transition of the released state model, (b) every row of the released probe table,
+and (c) every case of every corroborated ``must`` claim.
+
 What crosses back to the clean side is an :class:`AbstractVerdict`: test inputs (already public in the spec), the
-expected *symbol from the released vocabulary*, and the clone's own observed symbol. If the original produces
-something outside the released vocabulary (the model was incomplete), that output is withheld, the test is reported
-inconclusive, and an unknown is recorded on the dirty side for the observer to investigate.
+expected *symbol from the released spec*, and the clone's own observed symbol. If the original no longer behaves as
+released (drift) or produces something outside the released vocabulary (an incomplete model), that output is
+withheld, the test is reported inconclusive, and an unknown is recorded on the dirty side for the observer.
 
 Noise is calibrated Diffy-style: each test runs ``repeats`` times on the original; positions where those runs
 disagree are reported inconclusive rather than failed.
@@ -13,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -21,7 +24,8 @@ from teardown.audit.log import AuditLog
 from teardown.core.model import ContentAddressed
 from teardown.drivers.session import ObservationSession
 from teardown.engine.claims import ClaimLedger
-from teardown.gate.gate import load_release
+from teardown.engine.mapper import symbol_matches
+from teardown.gate.gate import SpecRelease, load_release
 from teardown.spec.efsm import EFSM
 
 
@@ -33,7 +37,7 @@ class TestResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     test: int
-    kind: Literal["transition", "claim"]
+    kind: Literal["transition", "probe", "claim"]
     claim_id: str | None = None
     status: Literal["pass", "fail", "inconclusive"]
     step: int | None = None
@@ -54,17 +58,43 @@ class AbstractVerdict(ContentAddressed):
     results: list[TestResult] = Field(default_factory=list)
 
 
+class _Test(BaseModel):
+    kind: Literal["transition", "probe", "claim"]
+    inputs: list[str]
+    expect: list[str | None]
+    match: Literal["exact", "subset"] = "exact"
+    claim_id: str | None = None
+
+
+def conformance_suite(rel: SpecRelease, max_tests: int = 5000) -> list[_Test]:
+    spec, tests, seen = rel.spec, [], set()
+    if spec.get("model"):
+        model = EFSM.model_validate(spec["model"])
+        for inputs in model.transition_cover():
+            if tuple(inputs) not in seen:
+                seen.add(tuple(inputs))
+                tests.append(_Test(kind="transition", inputs=inputs, expect=model.run(inputs)))
+    for row in spec.get("probe_table", []):
+        tests.append(_Test(kind="probe", inputs=[row["action"]], expect=[row["expect"]]))
+    for claim in spec.get("claims", []):
+        if claim["status"] == "corroborated" and claim["strictness"] == "must":
+            for check in [claim["check"], *claim.get("cases", [])]:
+                tests.append(_Test(kind="claim", inputs=check["inputs"], expect=check["expect"],
+                                   match=check.get("match", "exact"), claim_id=claim["id"]))
+    return tests[:max_tests]
+
+
 class Verifier:
     def __init__(
         self,
         *,
         releases_dir: Path,
-        open_original: Callable[[], ObservationSession],
-        open_clone: Callable[[str], ObservationSession],
+        open_original: Callable[[SpecRelease], ObservationSession],
+        open_clone: Callable[[str, SpecRelease], ObservationSession],
         ledger: ClaimLedger,
         audit: AuditLog,
         max_calls_per_release: int = 50,
-        max_tests: int = 1000,
+        max_tests: int = 5000,
     ):
         self.releases_dir = releases_dir
         self.open_original = open_original
@@ -82,24 +112,17 @@ class Verifier:
             raise BudgetExceeded(f"verification budget for this release is spent ({self.max_calls} calls)")
         self._calls[rel.id] = used + 1
 
-        model = EFSM.model_validate(rel.spec["model"])
-        vocabulary = {o.symbol for o in model.outputs}
-        tests: list[tuple[str, list[str], list[str | None], str | None]] = []
-        for inputs in _dedupe(model.transition_cover()):
-            tests.append(("transition", inputs, list(model.run(inputs)), None))
-        for claim in rel.spec["claims"]:
-            if claim["status"] == "corroborated" and claim["strictness"] == "must":
-                tests.append(("claim", claim["check"]["inputs"], claim["check"]["expect"], claim["id"]))
-        tests = tests[: self.max_tests]
-
-        original = self.open_original()
-        clone = self.open_clone(clone_target)
+        vocabulary = {o["symbol"] for o in (rel.spec.get("model") or {}).get("outputs", [])}
+        vocabulary |= {row["expect"] for row in rel.spec.get("probe_table", [])}
+        tests = conformance_suite(rel, self.max_tests)
+        original = self.open_original(rel)
+        clone = self.open_clone(clone_target, rel)
         results: list[TestResult] = []
         try:
-            for i, (kind, inputs, expect, claim_id) in enumerate(tests):
-                runs = [original.run(inputs, use_cache=False)[0] for _ in range(max(1, repeats))]
-                observed = clone.run(inputs, use_cache=False)[0]
-                results.append(self._judge(i, kind, claim_id, inputs, expect, runs, observed, vocabulary, rel.codename))
+            for i, test in enumerate(tests):
+                runs = [original.run(test.inputs, use_cache=False)[0] for _ in range(max(1, repeats))]
+                observed = clone.run(test.inputs, use_cache=False)[0]
+                results.append(self._judge(i, test, runs, observed, vocabulary, rel.codename))
         finally:
             original.close()
             clone.close()
@@ -120,39 +143,28 @@ class Verifier:
         )
         return verdict
 
-    def _judge(self, i, kind, claim_id, inputs, expect, runs, observed, vocabulary, codename) -> TestResult:
-        base = {"test": i, "kind": kind, "claim_id": claim_id, "inputs": inputs}
-        for step, want in enumerate(expect):
-            if want is None and kind == "claim":
+    def _judge(self, i: int, test: _Test, runs: list[list[str]], observed: list[str], vocabulary: set[str],
+               codename: str) -> TestResult:
+        base: dict[str, Any] = {"test": i, "kind": test.kind, "claim_id": test.claim_id, "inputs": test.inputs}
+        for step, want in enumerate(test.expect):
+            if want is None and test.kind == "claim":
                 continue  # the claim says nothing about this step
             originals = {run[step] for run in runs}
             if len(originals) > 1:
                 return TestResult(**base, status="inconclusive", step=step, note="original is nondeterministic here")
             original = originals.pop()
-            if want is not None and original != want:
+            if want is not None and not symbol_matches(original, want, test.match):
                 self.ledger.record_unknown(
-                    codename,
-                    f"original no longer matches the released spec after {inputs[: step + 1]}",
-                    ["re-learn this feature", "re-probe the affected claims"],
-                )
+                    codename, f"original no longer matches the released spec after {test.inputs[: step + 1]}",
+                    ["re-probe or re-learn this feature", "re-probe the affected claims"])
                 return TestResult(**base, status="inconclusive", step=step, note="original diverged from the spec")
-            if original not in vocabulary:
+            if test.match == "exact" and original not in vocabulary:
                 self.ledger.record_unknown(
                     codename,
-                    f"original produced an output outside the released vocabulary after {inputs[: step + 1]}",
-                    ["raise the equivalence-oracle budget", "add round-trip probes around this prefix"],
-                )
+                    f"original produced an output outside the released vocabulary after {test.inputs[: step + 1]}",
+                    ["raise the equivalence-oracle budget", "add round-trip probes around this prefix"])
                 return TestResult(**base, status="inconclusive", step=step, note="released model is incomplete here")
-            if observed[step] != original:
-                return TestResult(**base, status="fail", step=step, expected=original, observed=observed[step])
+            expected = want if test.match == "subset" else original
+            if not symbol_matches(observed[step], expected, test.match):
+                return TestResult(**base, status="fail", step=step, expected=expected, observed=observed[step])
         return TestResult(**base, status="pass")
-
-
-def _dedupe(sequences: list[list[str]]) -> list[list[str]]:
-    seen, out = set(), []
-    for seq in sequences:
-        key = tuple(seq)
-        if key not in seen:
-            seen.add(key)
-            out.append(seq)
-    return out

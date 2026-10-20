@@ -10,7 +10,7 @@ Claims and unknowns have a content-addressed *identity* (what is being claimed o
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -94,6 +94,8 @@ class MapperVersion(ContentAddressed):
     PREFIX: ClassVar[str] = "map"
 
     target: str
+    builtin: str | None = Field(default=None, description="Built-in abstraction applied before the rules.")
+    params: dict[str, Any] = Field(default_factory=dict, description="Parameters of the built-in abstraction.")
     rules: list[MapperRule] = Field(default_factory=list)
     parent: str | None = None
     note: str = ""
@@ -146,12 +148,17 @@ class ClaimStatus(StrEnum):
 
 
 class TraceCheck(BaseModel):
-    """An executable claim: after a reset, apply ``inputs``; output i must equal ``expect[i]`` (None = don't care)."""
+    """An executable claim: after a reset, apply ``inputs``; output i must match ``expect[i]`` (None = don't care).
+
+    ``match="exact"`` compares whole symbols. ``match="subset"`` treats each expectation as a JSON object whose keys
+    must all equal the observed abstract observation's (e.g. ``{"exit": 1, "diagnostic": true}``).
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     inputs: list[str]
     expect: list[str | None]
+    match: Literal["exact", "subset"] = "exact"
 
     @model_validator(mode="after")
     def _same_length(self) -> TraceCheck:
@@ -172,6 +179,10 @@ class ClaimIdentity(ContentAddressed):
     layer: Layer = Layer.UNKNOWN
     reference: str = Field(description="Fingerprint of the reference build the claim was observed on.")
     mapper: str = Field(description="Mapper version that defines the output symbols in `check`.")
+    cases: list[TraceCheck] = Field(default_factory=list, description="Further checks the claim generalizes over.")
+
+    def all_checks(self) -> list[TraceCheck]:
+        return [self.check, *self.cases]
 
 
 class Claim(BaseModel):

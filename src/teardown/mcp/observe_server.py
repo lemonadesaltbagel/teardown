@@ -70,6 +70,24 @@ def build_observe_server(project: Project) -> MCPServer:
         session.close_trace()
         return {"initial": initial, "steps": steps, "provenance": UNTRUSTED}
 
+    @server.tool(description="Define named actions (CLI invocations: argv, stdin, files, env, stdin_mode, "
+                 "stdout_mode, timeout_s) for learning flows of stateful CLIs.")
+    def define_actions(actions: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        project.define_actions(actions)
+        return {"actions": sorted(project.state.actions)}
+
+    @server.tool(description="Discover a CLI's interface: help structure confirmed by behavior probes. Help prose "
+                 "is kept as dirty-side evidence only; the result is structure (options, arity, value types).")
+    def discover_cli(cmd: str, takes_files: bool = True) -> dict[str, Any]:
+        return project.discover_cli(cmd, takes_files=takes_files)
+
+    @server.tool(description="Probe a CLI feature: one-factor sweep, pairwise over accepted classes, noise "
+                 "calibration (rerun + env variations), probe table, mined decision-table claims and unknowns. "
+                 "`hints` = {cmd, base, selector_options, takes_files, default_input, sweep_inputs, inputs, "
+                 "pair_inputs, operand_type, unicode_argv, skip_options, extra_inputs, extra_values}.")
+    def probe_cli(feature: str, hints: dict[str, Any], pairwise: bool = True, env_sample: int = 200) -> dict[str, Any]:
+        return project.probe_cli(feature, hints, pairwise=pairwise, env_sample=env_sample)
+
     @server.tool(description="Learn a state machine for a feature with KV or L# under an explicit oracle budget.")
     def learn_flow(
         feature: str, alphabet: list[str], algorithm: str = "kv", walks_per_state: int = 100, walk_len: int = 20

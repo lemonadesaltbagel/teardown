@@ -11,7 +11,7 @@ from typing import Any
 
 from teardown.core.model import Evidence, ObservationTier, Trace
 from teardown.core.obstree import Conflict, ObservationTree
-from teardown.core.store import Workspace
+from teardown.core.store import Workspace, _strings
 from teardown.drivers.base import Action, Driver
 from teardown.drivers.policy import RateLimiter, check_action
 from teardown.engine.mapper import NOT_AVAILABLE, Mapper
@@ -51,6 +51,8 @@ class ObservationSession:
     def step(self, name: str, params: dict[str, Any] | None = None, category: str = "ui") -> tuple[str, str]:
         action = Action(name=name, params=params or {}, category=category)
         check_action(action)
+        if action.params:
+            self.workspace.add_supplied(list(_strings(action.params)))
         if self._reset_ev is None:
             self.reset()
         self._limiter.wait()
