@@ -54,7 +54,13 @@
   - [ ] TreeVada for file-input grammars.
 - [x] Bench harness: jq (`tests/jq.test` 1.7.1, fetched at run time, pinned denominator 429). [ ] coreutils.
 - **Exit:**
-  - [ ] The clean agent's jq clone is scored on the hidden jq tests (experiment running).
+  - [x] The clean agent's jq clone is scored on the hidden jq tests: 394/429 (91.8%); conformance 1725/0.
+    Memory-only control: 397/429 hidden, 132 conformance failures. The hidden suite is saturated by memorization
+    for jq; the spec's value shows on observed behavior (see `research/09-jq-cleanroom-experiment.md`).
+  - [ ] Uncontaminated benchmark: a CLI the implementer model cannot recognize (private/synthetic tool with its
+    own hidden test suite), spec arm vs memory/docs arm. This is the only clean measure of spec value.
+  - [ ] Observer-side coverage measurement (feature inventory per builtin/option, classes probed) so gaps like
+    `abs`, path-expression errors and `strftime` errors are found before release.
   - [ ] Teardown specs beat README-only specs on a CLI-Tool-Bench subset.
 
 ## Phase 2: web (L)
