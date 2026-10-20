@@ -76,8 +76,10 @@ def conformance_suite(rel: SpecRelease, max_tests: int = 5000) -> list[_Test]:
                 seen.add(tuple(inputs))
                 tests.append(_Test(kind="transition", inputs=inputs, expect=model.run(inputs)))
     for row in spec.get("probe_table", []):
-        seen.add((row["action"],))
-        tests.append(_Test(kind="probe", inputs=[row["action"]], expect=[row["expect"]]))
+        inputs = [*row.get("prefix", []), row["action"]]
+        seen.add(tuple(inputs))
+        tests.append(_Test(kind="probe", inputs=inputs, expect=[None] * (len(inputs) - 1) + [row["expect"]],
+                           match=row.get("match", "exact")))
     for claim in spec.get("claims", []):
         if claim["status"] == "corroborated" and claim["strictness"] == "must":
             for check in [claim["check"], *claim.get("cases", [])]:
@@ -123,7 +125,7 @@ class Verifier:
         self._budget_file.write_text(json.dumps(calls))
 
         vocabulary = {o["symbol"] for o in (rel.spec.get("model") or {}).get("outputs", [])}
-        vocabulary |= {row["expect"] for row in rel.spec.get("probe_table", [])}
+        vocabulary |= {row["expect"] for row in rel.spec.get("probe_table", []) if row.get("match", "exact") == "exact"}
         for claim in rel.spec.get("claims", []):
             for check in [claim["check"], *claim.get("cases", [])]:
                 if check.get("match", "exact") == "exact":
@@ -162,8 +164,8 @@ class Verifier:
                codename: str) -> TestResult:
         base: dict[str, Any] = {"test": i, "kind": test.kind, "claim_id": test.claim_id, "inputs": test.inputs}
         for step, want in enumerate(test.expect):
-            if want is None and test.kind == "claim":
-                continue  # the claim says nothing about this step
+            if want is None and test.kind in ("claim", "probe"):
+                continue  # the test says nothing about this step
             originals = {run[step] for run in runs}
             if len(originals) > 1:
                 return TestResult(**base, status="inconclusive", step=step, note="original is nondeterministic here")

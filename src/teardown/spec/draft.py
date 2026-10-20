@@ -34,6 +34,8 @@ class ProbeRow(BaseModel):
     action: str
     expect: str
     tags: list[str] = Field(default_factory=list)
+    prefix: list[str] = Field(default_factory=list, description="Named actions run before `action` (UI targets).")
+    match: str = Field(default="exact", description="'exact' or 'subset' (UI rows assert only some keys).")
 
 
 class ProbeTable(ContentAddressed):
@@ -80,7 +82,7 @@ class SpecDraft(ContentAddressed):
         model = self.model.model if self.model else None
         actions: dict[str, Any] = dict(sorted(self.actions.items()))
         if self.probes:
-            used = {r.action for r in self.probes.rows}
+            used = {a for r in self.probes.rows for a in [*r.prefix, r.action]}
             used |= {a for c in self.claims for check in c.identity.all_checks() for a in check.inputs}
             actions.update({k: v for k, v in sorted(self.probes.actions.items()) if k in used})
         return {

@@ -88,6 +88,15 @@ def build_observe_server(project: Project) -> MCPServer:
     def probe_cli(feature: str, hints: dict[str, Any], pairwise: bool = True, env_sample: int = 200) -> dict[str, Any]:
         return project.probe_cli(feature, hints, pairwise=pairwise, env_sample=env_sample)
 
+    @server.tool(description="Probe one web form field: equivalence classes for its kind (text/email/password/"
+                 "number or custom `classes`), a length-boundary search, per-class outcomes and folded claims. "
+                 "`prefix` = named actions that reach the form; `submit` = the named action that submits it. "
+                 "Boundary classes become named actions you can add to learn_flow's alphabet.")
+    def probe_web_field(feature: str, prefix: list[str], role: str, name: str, submit: str, kind: str = "text",
+                        classes: dict[str, str] | None = None, valid: str | None = None) -> dict[str, Any]:
+        return project.probe_web_field(feature, prefix=prefix, role=role, name=name, submit=submit, kind=kind,
+                                       classes=classes, valid=valid)
+
     @server.tool(description="Learn a state machine for a feature with KV or L# under an explicit oracle budget.")
     def learn_flow(
         feature: str, alphabet: list[str], algorithm: str = "kv", walks_per_state: int = 100, walk_len: int = 20

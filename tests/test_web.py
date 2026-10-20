@@ -78,3 +78,19 @@ def test_web_claim_release_and_verify_against_variant(site, tmp_path):
     variant = verifier.verify("web:" + site.url("signup_b.html"), repeats=1)
     assert same.failed == 0 and same.passed == 1
     assert variant.failed == 1 and variant.results[0].step == 4
+
+
+def test_field_probing_finds_length_boundary_and_refusal_classes(site, tmp_path):
+    project = Project(tmp_path / "p")
+    project.open_target("web:" + site.url("signup_a.html"), purpose="research")
+    project.define_actions({"next": ACTIONS["next"]})
+    result = project.probe_web_field("signup", prefix=[], role="textbox", name="Email", submit="next", kind="email")
+    assert result["boundary"] == 40  # signup_a limits email to 40 characters
+    assert result["boundary_actions"] == ["fill[Email]=len_at_max", "fill[Email]=len_over_max"]
+    claims = {c.identity.statement: c for c in project.ledger.all().values()}
+    refused = [s for s in claims if "is refused" in s]
+    assert any("email.len_over_max" in s for s in refused) and any("email.empty" in s for s in refused)
+    assert any("email.len_at_max" in s and "is accepted" in s for s in claims)
+    rel = project.release_spec(project.compile_spec("signup").id)
+    variant = project.verifier().verify("web:" + site.url("signup_b.html"), repeats=1)
+    assert rel.spec["probe_table"] and variant.failed > 0  # signup_b allows 50 characters

@@ -25,7 +25,7 @@ from teardown.drivers.fake import open_fake
 from teardown.drivers.session import ObservationSession
 from teardown.engine.claims import ClaimLedger
 from teardown.engine.learner import LearnResult, learn
-from teardown.engine.mapper import Mapper
+from teardown.engine.mapper import Mapper, describe_symbol
 from teardown.gate.gate import (
     GateConfig,
     GateMode,
@@ -388,6 +388,90 @@ class Project:
             "mixed": len(mixed)})
         return {"table": table.id, "probes": len(results), "rows": len(table.rows), "claims": len(mined),
                 "mixed": len(mixed), "noise": noise.model_dump(mode="json"), "accepted": accepted}
+
+    # -- web field probing -------------------------------------------------------------------------------------
+    def probe_web_field(self, feature: str, *, prefix: list[str], role: str, name: str, submit: str,
+                        kind: str = "text", classes: dict[str, str] | None = None, valid: str | None = None,
+                        boundary: bool = True, workers: int = 4) -> dict[str, Any]:
+        """Probe one form field: every class (plus the length boundary) is filled after ``prefix`` and submitted.
+
+        ``valid`` names a class known to be accepted; it defines the acceptance reference for the boundary search.
+        """
+        from teardown.engine import fieldprobe as fp
+        from teardown.engine.mining import mine
+
+        values = dict(classes or fp.CLASSES.get(kind, fp.TEXT))
+        valid = valid or ("valid" if "valid" in values else "typical" if "typical" in values else None)
+
+        def fill_action(cls: str, value: str) -> tuple[str, dict[str, Any]]:
+            return f"fill[{name}]={cls}", {"op": "fill", "role": role, "name": name, "value": value}
+
+        actions = dict(fill_action(c, v) for c, v in values.items())
+        self.define_actions(actions)
+        boundary_found = None
+        if boundary and valid:
+            session = self._worker_session()
+            try:
+                ref_inputs = [*prefix, fill_action(valid, values[valid])[0], submit]
+                reference = fp.outcome(describe_symbol(session.run(ref_inputs, use_cache=False)[0][-1]))
+
+                def probe_once(value: str) -> str:
+                    act_name, spec = fill_action("probe", value)
+                    session.reset()
+                    for step in prefix:
+                        session.step(step)
+                    session.step(act_name, params=spec)
+                    return session.step(submit)[1]
+
+                boundary_found = fp.length_boundary(probe_once, kind, reference)
+            finally:
+                session.close()
+            if boundary_found is not None:
+                extra = dict([fill_action("len_at_max", fp.value_for_length(kind, boundary_found)),
+                              fill_action("len_over_max", fp.value_for_length(kind, boundary_found + 1))])
+                self.define_actions(extra)
+                actions.update(extra)
+                values["len_at_max"] = extra[f"fill[{name}]=len_at_max"]["value"]
+                values["len_over_max"] = extra[f"fill[{name}]=len_over_max"]["value"]
+        probes = [fp.SequenceProbe(id=f"{feature}:{name}={cls}", inputs=[*prefix, f"fill[{name}]={cls}", submit],
+                                   tags=["s:field", f"field:{name}", f"val:{kind}.{cls}"]) for cls in values]
+        first = fp.run_sequences(self._worker_session, probes, workers=workers)
+        second = {r.probe.id: r.symbol for r in fp.run_sequences(self._worker_session, probes, workers=workers)}
+        nondet = {r.probe.id for r in first if fp.outcome_json(r.symbol) != fp.outcome_json(second[r.probe.id])}
+        table = ProbeTable(
+            feature=feature, target=self.state.target, mapper=self.state.mapper,
+            actions={k: v for k, v in self.action_table().items() if k in {*prefix, submit, *actions}},
+            rows=[ProbeRow(action=submit, prefix=r.probe.inputs[:-1], expect=fp.outcome_json(r.symbol),
+                           tags=r.probe.tags, match="subset") for r in first if r.probe.id not in nondet],
+            excluded={pid: "nondeterministic" for pid in sorted(nondet)},
+        )
+        state = self.state
+        if feature in state.probes:  # extend an existing table for the feature
+            old = self.workspace.get(state.probes[feature], ProbeTable)
+            table = ProbeTable(feature=feature, target=old.target, mapper=old.mapper,
+                               actions={**old.actions, **table.actions}, rows=[*old.rows, *table.rows],
+                               excluded={**old.excluded, **table.excluded}, discovery=old.discovery,
+                               mixed=old.mixed)
+        self.workspace.put(table)
+        self._save(self.state.model_copy(update={"probes": {**self.state.probes, feature: table.id}}))
+        mined, mixed = mine(feature, "the form", first, exclude=nondet, outcome=fp.outcome, describe=fp.describe)
+        for m in mined:
+            head, *rest = m.checks
+            claim = self.propose_claim(feature=feature, kind=m.kind, statement=m.statement, inputs=head.inputs,
+                                       expect=head.expect, match="subset", cases=rest)
+            self.ledger.record_batch(claim.id, 2 * len(m.checks), [])
+        for row in mixed:
+            self.ledger.record_unknown(feature, f"value class '{row['class']}' of {row['factor']} has mixed outcomes",
+                                       ["partition this class further"])
+        if boundary_found is None and boundary:
+            self.ledger.record_unknown(feature, f"no length limit observed for field '{name}' up to 4096 characters "
+                                       "(or no accepted reference)", ["probe longer values", "check server limits"])
+        summary = {"feature": feature, "field": name, "classes": len(values), "boundary": boundary_found,
+                   "claims": len(mined), "nondeterministic": len(nondet)}
+        self.audit.append("field-probe", {"table": table.id}, summary)
+        return {"table": table.id, "classes": len(values), "boundary": boundary_found, "claims": len(mined),
+                "mixed": len(mixed), "nondeterministic": sorted(nondet),
+                "boundary_actions": [a for a in actions if a.endswith(("=len_at_max", "=len_over_max"))]}
 
     # -- clean-side channels -----------------------------------------------------------------------------------
     def verifier(self) -> Verifier:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -49,6 +50,8 @@ def _factor(tags: list[str]) -> tuple[str, str] | None:
         opts = f" with options '{tag['opts']}'" if tag.get("opts") else ""
         on = f" on input {tag['in']}" if tag.get("in") else ""
         return f"operand {position} (form {tag.get('form', '?')}){opts}{on}", cls
+    if strategy == "field" and "field" in tag:
+        return f"field {tag['field']}", tag.get("val", "?")
     if strategy == "stdio" and "stdio" in tag:
         return "stdio mode", tag["stdio"]
     if strategy == "env" and "env" in tag:
@@ -67,18 +70,24 @@ def _describe(outcome: dict[str, Any]) -> str:
 
 
 def mine(feature: str, cmd: str, results: list[ProbeResult], *, exclude: set[str] | None = None,
-         min_probes: int = 1) -> tuple[list[MinedClaim], list[dict[str, Any]]]:
-    """Return (claims, mixed) where ``mixed`` lists factor classes whose probes disagree."""
+         min_probes: int = 1, outcome: Callable[[Any], dict[str, Any]] = outcome_class,
+         describe: Callable[[dict[str, Any]], str] | None = None) -> tuple[list[MinedClaim], list[dict[str, Any]]]:
+    """Return (claims, mixed) where ``mixed`` lists factor classes whose probes disagree.
+
+    ``results`` items need ``.probe.id``, ``.probe.tags``, ``.symbol`` and optionally ``.probe.inputs`` (the action
+    sequence for UI probes; CLI probes are a single action named by the probe id).
+    """
     exclude = exclude or set()
+    describe = describe or _describe
     groups: dict[str, dict[str, list[tuple[ProbeResult, dict]]]] = defaultdict(lambda: defaultdict(list))
     for r in results:
         if r.probe.id in exclude:
             continue
         key = _factor(r.probe.tags)
         if key:
-            groups[key[0]][key[1]].append((r, outcome_class(describe_symbol(r.symbol))))
+            groups[key[0]][key[1]].append((r, outcome(describe_symbol(r.symbol))))
     claims, mixed = [], []
-    for factor, classes in sorted(groups.items()):
+    for factor, classes in sorted(groups.items()):  # noqa: PLR1702
         by_outcome: dict[str, list[str]] = defaultdict(list)
         for cls, rows in sorted(classes.items()):
             outcomes = {json.dumps(o, sort_keys=True) for _, o in rows}
@@ -87,13 +96,22 @@ def mine(feature: str, cmd: str, results: list[ProbeResult], *, exclude: set[str
             else:
                 mixed.append({"factor": factor, "class": cls, "outcomes": sorted(outcomes)})
         for outcome_json, cls_list in sorted(by_outcome.items()):
-            outcome = json.loads(outcome_json)
+            result = json.loads(outcome_json)
             rows = [r for c in cls_list for r, _ in classes[c]]
             if len(rows) < min_probes:
                 continue
-            kind = ClaimKind.REFUSAL if outcome.get("exit") != 0 else ClaimKind.INPUT_DOMAIN
+            # CLI outcomes refuse by exit status; UI outcomes refuse by showing alerts or invalid controls.
+            if "exit" in result:
+                refused = result.get("exit") != 0
+            else:
+                refused = bool(result.get("alerts") or result.get("invalid"))
+            kind = ClaimKind.REFUSAL if refused else ClaimKind.INPUT_DOMAIN
             shown = ", ".join(cls_list[:12]) + (f" (+{len(cls_list) - 12} more)" if len(cls_list) > 12 else "")
-            statement = f"For {factor} with class {{{shown}}}, `{cmd}` {_describe(outcome)}."
-            checks = [TraceCheck(inputs=[r.probe.id], expect=[outcome_json], match="subset") for r in rows]
-            claims.append(MinedClaim(feature, kind, statement, factor, cls_list, outcome, checks))
+            statement = f"For {factor} with class {{{shown}}}, `{cmd}` {describe(result)}."
+            checks = []
+            for r in rows:
+                inputs = list(getattr(r.probe, "inputs", None) or [r.probe.id])
+                checks.append(TraceCheck(inputs=inputs, expect=[None] * (len(inputs) - 1) + [outcome_json],
+                                         match="subset"))
+            claims.append(MinedClaim(feature, kind, statement, factor, cls_list, result, checks))
     return claims, mixed
