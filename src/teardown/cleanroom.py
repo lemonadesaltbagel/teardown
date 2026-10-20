@@ -66,10 +66,30 @@ def export_kit(project_root: Path, out: Path) -> str:
                                                  contract=spec["testability_contract"]), encoding="utf-8")
     (out / "Dockerfile").write_text(DOCKERFILE.format(command=command), encoding="utf-8")
     repo = Path(__file__).resolve().parents[2]
+    # The kit must not reveal the project's (possibly real-name) directory: route through a codenamed link.
+    link = repo / ".teardown" / "verify" / rel.codename
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(project_root, target_is_directory=True)
     verify = out / "verify.sh"
-    verify.write_text(VERIFY.format(image=image, repo=shlex.quote(str(repo)), project=shlex.quote(str(project_root))),
+    verify.write_text(VERIFY.format(image=image, repo=shlex.quote(str(repo)), project=shlex.quote(str(link))),
                       encoding="utf-8")
     verify.chmod(0o755)
     if not (out / "impl" / "main.py").exists():
         (out / "impl" / "main.py").write_text("import sys\n\nsys.exit('not implemented')\n", encoding="utf-8")
+    _check_no_real_names(project_root, out)
     return str(out)
+
+
+def _check_no_real_names(project_root: Path, out: Path) -> None:
+    """Fail closed if any denylisted real name appears in the kit (file contents or the kit's own path)."""
+    state = json.loads((project_root / "project.json").read_text(encoding="utf-8"))
+    terms = [t.casefold() for t in state["gate"]["denylist"] if t]
+    hits = [t for t in terms if t in str(out).casefold()]
+    for path in out.rglob("*"):
+        if path.is_file() and path.suffix in {".md", ".sh", ".json", ""} | {"Dockerfile"}:
+            text = path.read_text(encoding="utf-8", errors="replace").casefold()
+            hits += [f"{t} in {path.name}" for t in terms if t in text]
+    if hits:
+        raise RuntimeError(f"clean-room kit leaks real names: {sorted(set(hits))}")

@@ -28,34 +28,34 @@
 ## Phase 1: CLI (M)
 
 - [ ] Driver:
-  - [ ] Pipe and PTY modes, with a per-stream `stdio_mode` setting.
-  - [ ] `wait_for` (regex, screen predicate or quiescence).
-  - [ ] An `env -i` canonical environment.
-  - [ ] asciicast v3 evidence plus a stderr sidecar.
-- [ ] Isolation: one container per batch with fresh directories per probe. Add an overlayfs/bwrap fast path on Linux. Benchmark reset cost in week 1.
+  - [x] Pipe mode with per-stream `stdin_mode`/`stdout_mode` (pipe, null, closed, full). **PTY mode: not yet.**
+  - [ ] `wait_for` (regex, screen predicate or quiescence) — needs PTY mode.
+  - [x] An `env -i` canonical environment (image PATH kept so the implementation under test resolves).
+  - [ ] asciicast v3 evidence plus a stderr sidecar (evidence is currently the JSON observation).
+- [x] Isolation: a persistent locked-down container session per worker (no network, read-only root, uid 65534,
+  no caps) driven by a shell loop on a private static busybox; ~24 ms per reset+step, so overlayfs/bwrap is not
+  needed yet. Local runner for native CLIs.
 - [ ] Interface discovery:
-  - [ ] Parse help, completion scripts and man pages into a neutral argument model.
-  - [ ] Confirm the model by behavior: unknown-option reference, sentinel files, minimal valid invocation.
-- [ ] Probe planner:
-  - [ ] Pairwise combinations over valid value classes only.
-  - [ ] Single-fault probes for invalid values.
-  - [ ] Every argv element tagged as a factor.
-- [ ] `calibrate_noise`: repeated runs plus a reprotest-style one-at-a-time variation sweep.
-- [ ] Comparison: the behavior-level tiers (side effects → exit/error class → normalized stdout) and the normalization stack.
+  - [x] Parse help into a neutral argument model (prose kept as dirty evidence only).
+  - [ ] Completion scripts and man pages.
+  - [x] Confirm the model by behavior: unknown-option reference, sentinel files, minimal valid invocation.
+- [x] Probe planner:
+  - [x] Pairwise combinations over accepted value classes only (two-phase planning).
+  - [x] Single-fault probes for invalid values.
+  - [x] Every argv element tagged as a factor; operand templates; stdio-mode probes.
+- [x] `calibrate_noise`: reordered rerun plus a one-at-a-time env variation sweep (TZ, LC_ALL, LANG).
+- [x] Comparison: behavior-level abstraction (`cli.behavior/v1`: exit, stdout, diagnostic + errno class, fs).
 - [ ] Claim kinds:
-  - [ ] `stdio-mode-dependence`
-  - [ ] `env-binding`
-  - [ ] `config-precedence`
-  - [ ] `exit-code`
-  - [ ] `signal-contract`
-  - [ ] `stream-attribution`
+  - [x] Decision-table claims (refusal / input-domain per option, operand, input, delivery mode, syntax edge,
+    stdio mode), with value-class folding and multi-case checks.
+  - [ ] `env-binding` (env dependence is recorded as an unknown for now), `config-precedence`, `signal-contract`.
 - [ ] Learning:
-  - [ ] L#/KV for REPL modes.
+  - [x] L#/KV over named CLI actions (`define_actions` + `learn_flow`), via the shared session.
   - [ ] TreeVada for file-input grammars.
-- [ ] Bench harness: jq (`tests/jq.test`) and 5 coreutils against the GNU tests, run hidden and fetched at test time, never vendored.
+- [x] Bench harness: jq (`tests/jq.test` 1.7.1, fetched at run time, pinned denominator 429). [ ] coreutils.
 - **Exit:**
-  - The clean agent's jq clone is scored on the hidden jq tests.
-  - Teardown specs beat README-only specs on a CLI-Tool-Bench subset.
+  - [ ] The clean agent's jq clone is scored on the hidden jq tests (experiment running).
+  - [ ] Teardown specs beat README-only specs on a CLI-Tool-Bench subset.
 
 ## Phase 2: web (L)
 
