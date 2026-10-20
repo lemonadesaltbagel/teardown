@@ -63,21 +63,22 @@
     `abs`, path-expression errors and `strftime` errors are found before release.
   - [ ] Teardown specs beat README-only specs on a CLI-Tool-Bench subset.
 
-## Phase 1.5: spec quality (priority, from the uncontaminated benchmark, `research/10-novel-benchmark.md`)
+## Phase 1.5: spec quality — done (round 2: spec arm 100%, `research/11-novel-benchmark-round2.md`)
 
-On a novel tool, the Teardown spec arm scored 84.7% on the hidden suite against 97.0% for an implementer with the
-author's manual. The arms fail on disjoint cases (union 97.7%). Probe tables plus mined decision-table claims are too
-shallow to carry a rich language; the gap is on the observer side.
+Round 1 (`research/10`): spec arm 84.7% vs docs arm 97.0% on a novel CLI. After the items below, round 2 on a new
+novel tool with an independent observer agent: **spec arm 397/397**, hybrid (spec + manual) 397/397, docs arm 395/397.
 
-- [ ] Observer-authored rule claims (natural-language rule + formal check), with automatic targeted probe generation
-  and falsification; mined claims stay as supporting evidence.
-- [ ] Feature inventory + coverage gate: options/formats/modes from help, sections/functions/edge cases from public
-  docs; unprobed items block release or become explicit unknowns.
-- [ ] Wider input fixtures (value classes × several inputs) and generated input-format probes (escapes, headers,
-  field counts, comments/blank lines).
-- [ ] Docs-to-claims: documentation rules rewritten as claims (observer's words), verified by probes, conflicts
-  reported. Never copy documentation prose (the docs arm reproduced help text verbatim).
-- [ ] Re-run the novel benchmark with a fresh tool; target spec arm ≥ docs arm with no target prose in the clone.
+- [x] Observer-authored rule claims (`check_rules`: outcome / same / differs), released with observed symbols and
+  verified as relations on the clone; works for CLI invocations and UI action sequences.
+- [x] Feature inventory + coverage report; uncovered items become unknowns (`coverage`).
+- [x] Generic input mutations and observer mutation lines; designed probes; per-option value classes.
+- [x] Docs ingestion (gate corpus) and documentation/behavior conflicts as unknowns.
+- [x] Observer guide (`docs/observer-guide.md`) for observer agents.
+- [x] Re-run the novel benchmark: done (round 2).
+- [ ] Coverage gate that *blocks* release in strict mode when inventory items are uncovered.
+- [ ] Rule-authoring loop: propose a rewrite for falsified rules from the failing checks' observed symbols.
+- [ ] Explicit gate decision for byte-exact prose required by behavior (help/usage text): approve as quote or drop.
+- [ ] More rounds (more tools, other domains, several runs) for variance; observer effort/quality as a variable.
 
 ## Phase 2: web (L)
 
