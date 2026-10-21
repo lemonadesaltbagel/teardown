@@ -87,6 +87,39 @@ _CONTRACT_PROBE = """(sels) => Object.fromEntries(sels.map(sel => {
 
 _LOCAL = threading.local()
 _ASSETS: dict[str, tuple[int, dict[str, str], bytes]] = {}  # url -> (status, headers, body), per process
+ASSET_FETCH_TIMEOUT_MS = 10_000
+
+
+def _asset_cache_dir() -> Path:
+    import os
+
+    return Path(os.environ.get("TEARDOWN_CACHE", Path.home() / ".cache" / "teardown")) / "assets"
+
+
+def _cached_asset(route) -> tuple[int, dict[str, str], bytes] | None:
+    """Third-party asset for ``route``: memory, then the on-disk cache (so runs after the first are offline and
+    byte-identical), then one fetch with a timeout. None when it cannot be fetched."""
+    import hashlib
+
+    url = route.request.url
+    if url in _ASSETS:
+        return _ASSETS[url]
+    path = _asset_cache_dir() / hashlib.sha256(url.encode()).hexdigest()
+    if path.exists():
+        meta = json.loads(path.with_suffix(".json").read_text())
+        _ASSETS[url] = (meta["status"], meta["headers"], path.read_bytes())
+        return _ASSETS[url]
+    try:
+        fetched = route.fetch(timeout=ASSET_FETCH_TIMEOUT_MS)
+        entry = (fetched.status, dict(fetched.headers), fetched.body())
+    except Exception:  # noqa: BLE001 - CDN unreachable or too slow: the asset is missing for this episode
+        return None
+    if 200 <= entry[0] < 300:  # only successful responses are cached
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(entry[2])
+        path.with_suffix(".json").write_text(json.dumps({"url": url, "status": entry[0], "headers": entry[1]}))
+    _ASSETS[url] = entry
+    return entry
 _ASSET_TYPES = {"stylesheet", "font", "image"}
 
 
@@ -241,11 +274,12 @@ class WebDriver(Driver):
                     if host in allowed or req.url.startswith(("data:", "blob:")):
                         route.continue_()
                     elif host in assets and req.resource_type in _ASSET_TYPES and req.method == "GET":
-                        if req.url not in _ASSETS:
-                            fetched = route.fetch()
-                            _ASSETS[req.url] = (fetched.status, fetched.headers, fetched.body())
-                        status, headers, body = _ASSETS[req.url]
-                        route.fulfill(status=status, headers=headers, body=body)
+                        cached = _cached_asset(route)
+                        if cached is None:
+                            self.blocked.add((host or "", req.resource_type))
+                            route.abort()
+                        else:
+                            route.fulfill(status=cached[0], headers=cached[1], body=cached[2])
                     else:
                         self.blocked.add((host or "", req.resource_type))
                         route.abort()
