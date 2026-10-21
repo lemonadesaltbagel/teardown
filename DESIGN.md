@@ -61,7 +61,10 @@ There is **one** policy profile. Users may analyze for any purpose, including bu
 
 ### Strict mode (opt-in)
 
-- Gate findings **block** release until a human signs it.
+- Gate findings **block** release until recorded approvals cover all of them: functional classes
+  (expected outputs, interface names) can be approved as a class; prose only one finding at a time. Coverage gaps
+  need an acknowledgement. Approvals are made at a terminal (`teardown approve`), never through the observer's MCP
+  tools. See `docs/strict-gate.md`.
 - Verdicts return symbols only.
 - Memorization probes and canaries are mandatory.
 - Trademark and trade-dress scrubbing is enforced.

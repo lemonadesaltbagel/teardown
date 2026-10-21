@@ -367,9 +367,24 @@ def test_strict_mode_blocks_release_until_coverage_is_measured_or_gaps_acknowled
     with pytest.raises(CoverageGateBlocked) as blocked:
         project.release_spec(draft.id)
     assert "made-up feature" in blocked.value.gaps
-    project.release_spec(draft.id, approved_by="reviewer")  # a human acknowledges the gaps
+    with pytest.raises(ValueError):  # strict: a name passed to release is not an approval
+        project.release_spec(draft.id, approved_by="reviewer")
+    project.approve_coverage_gaps("sort", "reviewer")  # a human acknowledges the gaps (`teardown approve`)
+    _, report = project.review_spec(draft.id)
+    for cls in {f.cls for f in report.findings} - {"prose"}:
+        project.approve_findings(draft.id, "reviewer", "test-oracle", cls=cls)
+    prose = [f.id for f in project.review_spec(draft.id)[1].unapproved()]
+    if prose:
+        with pytest.raises(ValueError):
+            project.approve_findings(draft.id, "reviewer", "test-oracle", cls="prose")
+        project.approve_findings(draft.id, "reviewer", "test-oracle", finding_ids=prose)
+    project.release_spec(draft.id)
     kinds = [e["statement"]["predicateType"].split("/")[-2] for e in project.audit.entries()]
     assert "coverage-gaps-approved" in kinds and kinds[-1] == "spec-release"
+    project.coverage("sort", {"made-up feature": ["--frobnicate"], "another": ["--nope"]})
+    with pytest.raises(CoverageGateBlocked) as blocked:  # a new gap needs a new acknowledgement
+        project.release_spec(draft.id)
+    assert blocked.value.gaps == ["another"]
 
 
 def test_falsified_rules_come_with_rewrite_suggestions(tmp_path):

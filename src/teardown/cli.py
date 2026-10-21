@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -70,6 +71,32 @@ def main(argv: list[str] | None = None) -> int:
 
     audit = sub.add_parser("audit-verify", help="verify a project's audit hash chain")
     audit.add_argument("--project", required=True, type=Path)
+
+    rev = sub.add_parser("review", help="show a draft's gate findings by class, their approvals and coverage gaps")
+    rev.add_argument("--project", required=True, type=Path)
+    which = rev.add_mutually_exclusive_group(required=True)
+    which.add_argument("--draft")
+    which.add_argument("--feature", help="compile the feature's current draft and review it")
+    rev.add_argument("--json", action="store_true")
+
+    apv = sub.add_parser("approve", help="human at a terminal: approve gate findings or acknowledge coverage gaps")
+    apv.add_argument("--project", required=True, type=Path)
+    which = apv.add_mutually_exclusive_group(required=True)
+    which.add_argument("--draft")
+    which.add_argument("--feature")
+    apv.add_argument("--by", required=True, help="your name or e-mail (recorded in the audit log)")
+    what = apv.add_mutually_exclusive_group(required=True)
+    what.add_argument("--class", dest="cls", choices=["expected-output", "interface"])
+    what.add_argument("--finding", nargs="+", help="finding ids (fnd_...) from `teardown review`")
+    what.add_argument("--coverage", action="store_true", help="acknowledge the feature's current coverage gaps")
+    apv.add_argument("--reason", choices=["protocol", "file-format", "public-api", "error-code", "accessibility-name",
+                                          "test-oracle", "user-required"], help="why the text is functional")
+    apv.add_argument("--kind", default="verbatim", help="finding kind for --class (verbatim, near-verbatim)")
+    apv.add_argument("--note", default="")
+
+    rel = sub.add_parser("release", help="release a feature's current draft through the gate")
+    rel.add_argument("--project", required=True, type=Path)
+    rel.add_argument("--feature", required=True)
 
     args = parser.parse_args(argv)
 
@@ -188,6 +215,101 @@ def main(argv: list[str] | None = None) -> int:
         from teardown.audit.log import AuditLog
 
         print(f"ok: {AuditLog(args.project / 'audit.jsonl').verify()} entries")
+    elif args.command == "review":
+        return _review(args)
+    elif args.command == "approve":
+        return _approve(args)
+    elif args.command == "release":
+        from teardown.project import Project
+
+        project = Project(args.project)
+        rel = project.release_spec(project.compile_spec(args.feature).id)
+        print(json.dumps({"release": rel.id, "codename": rel.codename, "mode": rel.mode,
+                          "findings": len(rel.report.findings), "approved_by": rel.report.approved_by}, indent=1))
+    return 0
+
+
+def _draft_id(project, args) -> str:
+    return args.draft or project.compile_spec(args.feature).id
+
+
+def _review(args) -> int:
+    from teardown.project import Project
+    from teardown.spec.draft import SpecDraft
+
+    project = Project(args.project)
+    draft_id = _draft_id(project, args)
+    draft = project.workspace.get(draft_id, SpecDraft)
+    _, report = project.review_spec(draft_id)
+    summary = report.summary()
+    gaps = project.coverage_gaps(draft.feature) if draft.probes is not None else []
+    acknowledged = set((project.state.coverage_approvals.get(draft.feature) or {}).get("gaps", []))
+    summary.update(draft=draft_id, feature=draft.feature, coverage_gaps=gaps,
+                   coverage_unacknowledged=[g for g in gaps if g not in acknowledged],
+                   prose=[{"id": f.id, "location": f.location, "matched": f.matched, "approved": bool(f.approval)}
+                          for f in report.findings if f.cls == "prose"])
+    if args.json:
+        print(json.dumps(summary, indent=1, ensure_ascii=False))
+        return 0
+    print(f"draft {draft_id}  feature {draft.feature!r}  gate mode {summary['mode']}")
+    print(f"findings: {summary['findings']}, without approval: {summary['unapproved']}")
+    for g in summary["groups"]:
+        how = "approve as a class" if g["class_approvable"] else "approve one by one, or rewrite"
+        print(f"  {g['cls']:<16} {g['kind']:<14} {g['findings']:>4} findings, {g['approved']:>4} approved  ({how})")
+        for ex in g["examples"]:
+            print(f"      {ex['id']}  {ex['location']}: {ex['matched']}")
+    for f in summary["prose"]:
+        print(f"  prose {f['id']}{' (approved)' if f['approved'] else ''}  {f['location']}: {f['matched']}")
+    if gaps:
+        print(f"coverage gaps: {len(gaps)}, unacknowledged: {len(summary['coverage_unacknowledged'])}")
+        for g in summary["coverage_unacknowledged"][:20]:
+            print(f"  - {g}")
+    return 0
+
+
+def _approve(args) -> int:
+    """Approvals are a human decision: they need an interactive terminal and a typed confirmation, so an agent
+    driving the observer tools cannot grant them to itself."""
+    from teardown.project import Project
+    from teardown.spec.draft import SpecDraft
+
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        print("teardown approve needs an interactive terminal: approvals are made by a person, not by an agent",
+              file=sys.stderr)
+        return 2
+    project = Project(args.project)
+    draft_id = _draft_id(project, args)
+    _, report = project.review_spec(draft_id)
+    codename = project.state.gate.codename
+    if args.coverage:
+        feature = args.feature or project.workspace.get(draft_id, SpecDraft).feature
+        gaps = project.coverage_gaps(feature)
+        print(f"Acknowledge {len(gaps)} coverage gap(s) of {feature!r} (released as unknowns):")
+        for g in gaps[:30]:
+            print(f"  - {g}")
+    else:
+        if not args.reason:
+            print("--reason is required for findings", file=sys.stderr)
+            return 2
+        if args.cls:
+            covered = [f for f in report.findings if f.cls == args.cls and f.kind == args.kind]
+        else:
+            covered = [f for f in report.findings if f.id in set(args.finding)]
+        print(f"Approve {len(covered)} finding(s) as functional ({args.reason}):")
+        for f in covered[:15]:
+            print(f"  {f.id}  {f.location}: {f.matched[:100]}")
+        if len(covered) > 15:
+            print(f"  ... and {len(covered) - 15} more")
+    typed = input(f"Type the codename '{codename}' to confirm: ").strip()
+    if typed != codename:
+        print("not confirmed; nothing recorded", file=sys.stderr)
+        return 1
+    if args.coverage:
+        project.approve_coverage_gaps(feature, args.by, args.note)
+    else:
+        ids = project.approve_findings(draft_id, args.by, args.reason, finding_ids=args.finding, cls=args.cls,
+                                       kind=args.kind, note=args.note)
+        print(f"recorded {len(ids)} approval(s)")
     return 0
 
 

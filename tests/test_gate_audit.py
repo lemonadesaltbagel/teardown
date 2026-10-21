@@ -78,13 +78,27 @@ def test_quote_ledger_allows_justified_literals(signup_session, workspace):
     assert not any("at least 8" in f.matched for f in report.findings)
 
 
-def test_strict_mode_blocks_until_a_human_approves(signup_session, workspace, tmp_path):
-    draft = _draft(signup_session)
+def test_strict_mode_blocks_until_recorded_approvals_cover_every_finding(signup_session, workspace, tmp_path):
+    from teardown.gate.gate import GateApproval
+
+    draft = _draft(signup_session, statement="Shows 'Use at least 8 characters, including a number.'")
     config = GateConfig(codename="c", mode=GateMode.STRICT)
-    with pytest.raises(ReleaseBlocked):
-        release(draft, workspace.corpus(), config, tmp_path / "rel")
-    rel = release(draft, workspace.corpus(), config, tmp_path / "rel", approved_by="reviewer@example.com")
-    assert rel.report.approved_by == "reviewer@example.com" and load_release(tmp_path / "rel").id == rel.id
+    _, report = review(draft, workspace.corpus(), config)
+    classes = {f.cls for f in report.findings}
+    assert "prose" in classes and report.blocked
+    with pytest.raises(ReleaseBlocked):  # a name is not an approval
+        release(draft, workspace.corpus(), config, tmp_path / "rel", approved_by="reviewer@example.com")
+    by_class = [GateApproval(scope="class", cls=c, compat_reason="accessibility-name", approved_by="me")
+                for c in classes - {"prose"}]
+    prose_class = GateApproval(scope="class", cls="prose", compat_reason="user-required", approved_by="me")
+    config = config.model_copy(update={"approvals": [*by_class, prose_class]})
+    _, report = review(draft, workspace.corpus(), config)
+    assert [f.cls for f in report.unapproved()] and all(f.cls == "prose" for f in report.unapproved())
+    singles = [GateApproval(scope="finding", finding=f.id, compat_reason="test-oracle", approved_by="me")
+               for f in report.unapproved()]
+    config = config.model_copy(update={"approvals": [*by_class, *singles]})
+    rel = release(draft, workspace.corpus(), config, tmp_path / "rel")
+    assert rel.report.approved_by == "me" and load_release(tmp_path / "rel").id == rel.id
 
 
 def test_release_projection_carries_no_dirty_identifiers(signup_session, workspace, tmp_path):

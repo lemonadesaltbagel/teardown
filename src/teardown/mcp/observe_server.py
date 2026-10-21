@@ -11,6 +11,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 
 from teardown.core.model import Evidence
+from teardown.gate.gate import GateMode
 from teardown.project import Project
 
 INSTRUCTIONS = (
@@ -155,27 +156,42 @@ def build_observe_server(project: Project) -> MCPServer:
     @server.tool(description="Compile a spec draft (model + claims + unknowns) for a feature.")
     def compile_spec(feature: str) -> dict[str, Any]:
         draft = project.compile_spec(feature)
-        return {"draft": draft.id, "states": len(draft.model.model.states), "claims": len(draft.claims),
+        return {"draft": draft.id, "states": len(draft.model.model.states) if draft.model else 0,
+                "probe_rows": len(draft.probes.rows) if draft.probes else 0, "claims": len(draft.claims),
                 "unknowns": len(draft.unknowns)}
 
-    @server.tool(description="Run the gate on a draft without releasing it; returns findings.")
+    def human_only(what: str) -> None:
+        if project.state.gate.mode is GateMode.STRICT:
+            raise PermissionError(f"strict mode: {what} is a human decision; ask the person running the gate to use "
+                                  "`teardown review` and `teardown approve` at a terminal")
+
+    @server.tool(description="Run the gate on a draft without releasing it: findings grouped by class "
+                 "(expected-output / interface / prose), which are approved, and prose findings in full.")
     def review_spec(draft_id: str) -> dict[str, Any]:
         _, report = project.review_spec(draft_id)
-        return report.model_dump(mode="json")
+        summary = report.summary()
+        summary["prose"] = [{"id": f.id, "location": f.location, "matched": f.matched}
+                            for f in report.findings if f.cls == "prose" and not f.approval]
+        return summary
 
-    @server.tool(description="Release a draft through the gate. In strict mode findings need `approved_by`.")
-    def release_spec(draft_id: str, approved_by: str | None = None) -> dict[str, Any]:
-        rel = project.release_spec(draft_id, approved_by)
+    @server.tool(description="Release a draft through the gate. Strict mode: succeeds only once a person has "
+                 "approved every finding and acknowledged coverage gaps (`teardown approve`); rewrite prose findings "
+                 "instead of waiting for approval.")
+    def release_spec(draft_id: str) -> dict[str, Any]:
+        rel = project.release_spec(draft_id)
         return {"release": rel.id, "mode": rel.mode, "findings": len(rel.report.findings)}
 
-    @server.tool(description="Allow one literal through the gate, with the reason it is functionally necessary.")
+    @server.tool(description="Standard mode only: allow one literal through the gate, with the reason it is "
+                 "functionally necessary.")
     def add_quote(text: str, compat_reason: str, approved_by: str) -> dict[str, Any]:
+        human_only("approving a quote")
         project.add_quote(text, compat_reason, approved_by)
         return {"quotes": len(project.state.gate.quotes)}
 
-    @server.tool(description="Approve byte-exact output the behavior requires (default: help/usage/version output) "
-                 "as functional quotes, so the gate lets it through. Records who approved it.")
+    @server.tool(description="Standard mode only: approve byte-exact output the behavior requires (default: "
+                 "help/usage/version output) as functional quotes. Records who approved it.")
     def approve_observed_output(feature: str, approved_by: str, action_ids: list[str] | None = None) -> dict[str, Any]:
+        human_only("approving observed output")
         texts = project.approve_observed_output(feature, approved_by, action_ids=action_ids)
         return {"approved": len(texts)}
 

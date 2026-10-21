@@ -44,8 +44,8 @@ from teardown.spec.draft import ModelRecord, ProbeRow, ProbeTable, SpecDraft
 
 class CoverageGateBlocked(PermissionError):
     def __init__(self, feature: str, gaps: list[str]):
-        super().__init__(f"strict mode: feature {feature!r} has {len(gaps)} coverage gap(s); probe them, or release "
-                         f"with approved_by to acknowledge: {gaps[:5]}")
+        super().__init__(f"strict mode: feature {feature!r} has {len(gaps)} unacknowledged coverage gap(s); probe "
+                         f"them, or acknowledge them at a terminal with `teardown approve --coverage`: {gaps[:5]}")
         self.gaps = gaps
 
 
@@ -169,6 +169,8 @@ class ProjectState(BaseModel):
     rules: dict[str, str] = Field(default_factory=dict, description="feature -> latest rule table id")
     actions: dict[str, dict[str, Any]] = Field(default_factory=dict, description="named actions (invocations)")
     coverage: dict[str, dict[str, Any]] = Field(default_factory=dict, description="feature -> last coverage report")
+    coverage_approvals: dict[str, dict[str, Any]] = Field(
+        default_factory=dict, description="feature -> {gaps, approved_by, note}: coverage gaps a human acknowledged")
     target_options: dict[str, Any] = Field(default_factory=dict,
                                            description="driver options, e.g. reset_command, reset_check_url, "
                                                        "contract_selectors, profile (web determinism profile "
@@ -453,17 +455,78 @@ class Project:
         draft = self.workspace.get(draft_id, SpecDraft)
         return review(draft, self.workspace.corpus(), self.state.gate, self.workspace.supplied())
 
+    def coverage_gaps(self, feature: str) -> list[str]:
+        report = self.state.coverage.get(feature)
+        return ["coverage was never measured"] if report is None else list(report.get("uncovered", []))
+
+    def approve_findings(self, draft_id: str, approved_by: str, compat_reason: str, *,
+                         finding_ids: list[str] | None = None, cls: str | None = None, kind: str = "verbatim",
+                         note: str = "") -> list[str]:
+        """Record approvals for gate findings of a draft: listed findings, or (``cls``) a whole class of one kind.
+        Prose findings can only be approved one by one. Meant for a human at the gate (`teardown approve`)."""
+        from teardown.gate.gate import CLASS_APPROVABLE, COMPAT_REASONS, GateApproval
+
+        if not approved_by.strip():
+            raise ValueError("approved_by must name the person approving")
+        if compat_reason not in COMPAT_REASONS:
+            raise ValueError(f"compat_reason must be one of {COMPAT_REASONS}")
+        _, report = self.review_spec(draft_id)
+        known = {f.id: f for f in report.findings}
+        new: list[GateApproval] = []
+        if cls is not None:
+            if finding_ids:
+                raise ValueError("give either finding ids or a class, not both")
+            if cls not in CLASS_APPROVABLE:
+                raise ValueError(f"{cls!r} findings are approved one at a time (class approval is for "
+                                 f"{sorted(CLASS_APPROVABLE)})")
+            new.append(GateApproval(scope="class", cls=cls, kind=kind, compat_reason=compat_reason,
+                                    approved_by=approved_by, note=note))
+        else:
+            missing = [i for i in finding_ids or [] if i not in known]
+            if missing or not finding_ids:
+                raise KeyError(f"not findings of this draft: {missing}" if missing else "no findings named")
+            new = [GateApproval(scope="finding", finding=i, compat_reason=compat_reason, approved_by=approved_by,
+                                note=note) for i in finding_ids]
+        state = self.state
+        existing = {a.id for a in state.gate.approvals}
+        added = [a for a in new if a.id not in existing]
+        self._save(state.model_copy(update={"gate": state.gate.model_copy(
+            update={"approvals": [*state.gate.approvals, *added]})}))
+        for a in added:
+            covered = [f.id for f in report.findings if a.covers(f)]
+            self.audit.append("gate-approval", {"draft": draft_id},
+                              {**a.model_dump(mode="json"), "approval": a.id, "covers": covered})
+        return [a.id for a in added]
+
+    def approve_coverage_gaps(self, feature: str, approved_by: str, note: str = "") -> list[str]:
+        """Acknowledge the feature's current coverage gaps (they are released as unknowns). New gaps need a new
+        acknowledgement."""
+        if not approved_by.strip():
+            raise ValueError("approved_by must name the person approving")
+        gaps = self.coverage_gaps(feature)
+        state = self.state
+        approvals = {**state.coverage_approvals, feature: {"gaps": gaps, "approved_by": approved_by, "note": note}}
+        self._save(state.model_copy(update={"coverage_approvals": approvals}))
+        self.audit.append("coverage-gaps-approved", {}, {"feature": feature, "gaps": gaps, "approved_by": approved_by,
+                                                          "note": note})
+        return gaps
+
     def release_spec(self, draft_id: str, approved_by: str | None = None) -> SpecRelease:
+        """Release a draft through the gate. In strict mode nothing passed here approves anything: findings and
+        coverage gaps need recorded approvals (``approve_findings`` / ``approve_coverage_gaps``, i.e. `teardown
+        approve` at a terminal). In standard mode ``approved_by`` only names who released."""
         draft = self.workspace.get(draft_id, SpecDraft)
         state = self.state
-        if state.gate.mode is GateMode.STRICT and draft.probes is not None:
-            report = state.coverage.get(draft.feature)
-            gaps = ["coverage was never measured"] if report is None else report.get("uncovered", [])
-            if gaps and not approved_by:
-                raise CoverageGateBlocked(draft.feature, gaps)
-            if gaps:
-                self.audit.append("coverage-gaps-approved", {"draft": draft.id},
-                                  {"feature": draft.feature, "gaps": gaps, "approved_by": approved_by})
+        if state.gate.mode is GateMode.STRICT:
+            if approved_by:
+                raise ValueError("strict mode: approvals are recorded with `teardown approve` at a terminal, not "
+                                 "passed to release_spec")
+            if draft.probes is not None:
+                gaps = self.coverage_gaps(draft.feature)
+                acknowledged = set((state.coverage_approvals.get(draft.feature) or {}).get("gaps", []))
+                open_gaps = [g for g in gaps if g not in acknowledged]
+                if open_gaps:
+                    raise CoverageGateBlocked(draft.feature, open_gaps)
         rel = release(draft, self.workspace.corpus(), self.state.gate, self.releases_dir, approved_by=approved_by,
                       supplied=self.workspace.supplied())
         self.audit.append(

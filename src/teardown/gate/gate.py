@@ -1,8 +1,18 @@
 """The gate: sanitize a spec draft's release projection and decide whether it may cross to the clean side.
 
 Every check runs in every mode. In ``standard`` mode findings are warnings and the release proceeds; in ``strict``
-mode any finding blocks the release until a named human approves it. The user owns the legal judgment either way;
-the gate's job is to make leaked expression visible and to keep the record.
+mode every finding blocks the release until a recorded approval covers it. The user owns the legal judgment either
+way; the gate's job is to make leaked expression visible and to keep the record.
+
+Findings are classified by where they sit in the spec:
+
+- ``expected-output``: observed outcomes a conforming clone must reproduce (probe rows, rule-check expectations and
+  observations, model outputs). Usually functional (UI labels, messages the behavior includes).
+- ``interface``: what the clean side drives and calls (action names and values, API paths, contract selectors).
+- ``prose``: the observer's own sentences (rule statements, claims, unknowns) and anything unclassified. Expression
+  that leaks here is never functional; it is approved one finding at a time, or rewritten.
+
+``expected-output`` and ``interface`` findings may be approved as a class; ``prose`` findings only individually.
 """
 
 from __future__ import annotations
@@ -16,7 +26,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from teardown.core.ids import sha256_hex
+from teardown.core.ids import canonical_json, sha256_hex
 from teardown.core.model import ContentAddressed
 from teardown.gate.matcher import CorpusMatcher, NearMatcher, tokenize
 from teardown.spec.draft import SpecDraft
@@ -55,9 +65,34 @@ class GateConfig(BaseModel):
     codename: str
     denylist: list[str] = Field(default_factory=list, description="Real names replaced by the codename.")
     quotes: list[QuoteEntry] = Field(default_factory=list)
+    approvals: list[GateApproval] = Field(default_factory=list)
     min_tokens: int = Field(default=4, description="Shortest verbatim token run that counts as a leak.")
     near_threshold: float = Field(default=0.5, description="Share of a string's winnowing fingerprints from one "
                                   "corpus passage that counts as near-verbatim (strings of 12+ words).")
+
+
+FINDING_CLASSES = ("expected-output", "interface", "prose")
+CLASS_APPROVABLE = {"expected-output", "interface"}
+COMPAT_REASONS = ("protocol", "file-format", "public-api", "error-code", "accessibility-name", "test-oracle",
+                  "user-required")
+
+
+def finding_class(location: str) -> str:
+    """Spec location (``$.rules[3].checks[0].expect``) -> finding class."""
+    path = re.sub(r"\[\d+\]", "[]", location)
+    head = path.split(".")[1] if path.count(".") else ""
+    head = head.removesuffix("[]")
+    if head in ("probe_table", "model", "requirements", "xstate"):
+        return "expected-output"
+    if head in ("actions", "api", "markup_contract", "interface", "vocabulary", "abstraction"):
+        return "interface"
+    if head in ("rules", "claims"):
+        segments = {seg.removesuffix("[]") for seg in path.split(".")[2:]}
+        if segments & {"expect", "observed_a", "observed_b", "observed"}:
+            return "expected-output"
+        if segments & {"a", "b", "a_inputs", "b_inputs", "inputs", "keys", "actions", "argv", "stdin", "files"}:
+            return "interface"
+    return "prose"
 
 
 class Finding(BaseModel):
@@ -69,6 +104,36 @@ class Finding(BaseModel):
     matched: str = ""
     tokens: int = 0
     occurrences: int = 1
+    cls: str = "prose"
+    approval: str | None = Field(default=None, description="Id of the approval covering this finding, if any.")
+
+    @property
+    def id(self) -> str:
+        """Stable across re-reviews: the same leaked run in the same class keeps its id."""
+        return "fnd_" + sha256_hex(canonical_json([self.kind, self.cls, self.matched]))[:16]
+
+
+class GateApproval(BaseModel):
+    """A human's decision that findings may cross: one finding (by id), or a whole class of one kind."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope: str = Field(description="'finding' or 'class'")
+    finding: str | None = None
+    cls: str | None = None
+    kind: str = "verbatim"
+    compat_reason: str
+    approved_by: str
+    note: str = ""
+
+    @property
+    def id(self) -> str:
+        return "apv_" + sha256_hex(canonical_json(self.model_dump(mode="json")))[:16]
+
+    def covers(self, f: Finding) -> bool:
+        if self.scope == "finding":
+            return self.finding == f.id
+        return self.cls == f.cls and self.kind == f.kind and f.cls in CLASS_APPROVABLE
 
 
 class GateReport(BaseModel):
@@ -78,6 +143,24 @@ class GateReport(BaseModel):
     findings: list[Finding]
     blocked: bool
     approved_by: str | None = None
+
+    def unapproved(self) -> list[Finding]:
+        return [f for f in self.findings if f.approval is None]
+
+    def summary(self) -> dict[str, Any]:
+        """Findings grouped by class and kind: counts, approved counts, a few examples."""
+        groups: dict[str, dict[str, Any]] = {}
+        for f in self.findings:
+            g = groups.setdefault(f"{f.cls}/{f.kind}", {"cls": f.cls, "kind": f.kind, "findings": 0, "approved": 0,
+                                                         "class_approvable": f.cls in CLASS_APPROVABLE,
+                                                         "examples": []})
+            g["findings"] += 1
+            g["approved"] += f.approval is not None
+            if len(g["examples"]) < 3:
+                g["examples"].append({"id": f.id, "location": f.location, "matched": f.matched[:80]})
+        return {"mode": self.mode.value, "blocked": self.blocked, "findings": len(self.findings),
+                "unapproved": len(self.unapproved()), "groups": sorted(groups.values(), key=lambda g: (
+                    FINDING_CLASSES.index(g["cls"]), g["kind"]))}
 
 
 class SpecRelease(ContentAddressed):
@@ -92,7 +175,9 @@ class SpecRelease(ContentAddressed):
 
 class ReleaseBlocked(PermissionError):
     def __init__(self, report: GateReport):
-        super().__init__(f"strict mode: {len(report.findings)} gate finding(s) need human approval")
+        super().__init__(f"strict mode: {len(report.unapproved())} of {len(report.findings)} gate finding(s) have "
+                         "no approval; review them with `teardown review` and approve at a terminal with "
+                         "`teardown approve`, or rewrite the text")
         self.report = report
 
 
@@ -112,7 +197,8 @@ def review(draft: SpecDraft, corpus: list[str], config: GateConfig,
     found: dict[tuple[str, str], Finding] = {}
 
     def add(finding: Finding) -> None:
-        key = (finding.kind, finding.matched)
+        finding.cls = finding_class(finding.location)
+        key = (finding.kind, finding.cls, finding.matched)
         if key in found:
             found[key].occurrences += 1
         else:
@@ -145,8 +231,12 @@ def review(draft: SpecDraft, corpus: list[str], config: GateConfig,
             if term in lowered:
                 add(Finding(kind="denylist", location=location, text=text, matched=term))
     findings = list(found.values())
-    blocked = config.mode is GateMode.STRICT and bool(findings)
-    return projection, GateReport(mode=config.mode, findings=findings, blocked=blocked)
+    for f in findings:
+        f.approval = next((a.id for a in config.approvals if a.covers(f)), None)
+    approved = sorted({a.approved_by for a in config.approvals if any(f.approval == a.id for f in findings)})
+    blocked = config.mode is GateMode.STRICT and any(f.approval is None for f in findings)
+    return projection, GateReport(mode=config.mode, findings=findings, blocked=blocked,
+                                  approved_by=", ".join(approved) or None)
 
 
 def release(
@@ -159,10 +249,10 @@ def release(
     supplied: list[str] | None = None,
 ) -> SpecRelease:
     projection, report = review(draft, corpus, config, supplied)
-    if report.blocked:
-        if not approved_by:
-            raise ReleaseBlocked(report)
-        report = report.model_copy(update={"blocked": False, "approved_by": approved_by})
+    if report.blocked:  # strict: only recorded approvals count; a name passed here is not an approval
+        raise ReleaseBlocked(report)
+    if approved_by and config.mode is GateMode.STANDARD:
+        report = report.model_copy(update={"approved_by": approved_by})
     previous = _latest_id(releases_dir)
     rel = SpecRelease(codename=config.codename, mode=config.mode, spec=projection, report=report, previous=previous)
     releases_dir.mkdir(parents=True, exist_ok=True)
