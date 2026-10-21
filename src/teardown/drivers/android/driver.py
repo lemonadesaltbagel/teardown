@@ -26,7 +26,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from teardown.core.ids import content_id
 from teardown.drivers.base import Action, Driver, DriverCapabilities
@@ -57,10 +57,11 @@ def role_of(cls: str) -> str:
 class AndroidAction(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    action: Literal["click", "fill", "key", "back", "longclick"]
+    action: Literal["click", "fill", "key", "back", "longclick", "network"]
     role: str | None = None
     name: str | None = None
-    value: str | None = None
+    value: str | None = Field(default=None, description="fill: text; key: keycode; network: 'off' | 'on' (airplane "
+                              "mode, restored at every reset)")
 
 
 def parse_dump(xml_text: str) -> list[dict[str, Any]]:
@@ -116,6 +117,7 @@ class AndroidDriver(Driver):
         self._agent_file = None
         self._agent_proc: subprocess.Popen | None = None
         self._use_agent = self.options.get("agent", True)
+        self._network_off = False
 
     def _sh(self, *args: str, timeout: float = 30) -> str:
         cp = subprocess.run([self.adb, "-s", self.serial, *args], capture_output=True, text=True, timeout=timeout)
@@ -142,6 +144,8 @@ class AndroidDriver(Driver):
         if not self._configured:
             self._configure()
         self._sh("shell", "am", "force-stop", self.package)
+        if self._network_off:  # a network fault never outlives its episode
+            self._set_network(True)
         self._sh("shell", "pm", "clear", self.package)
         component = self._launcher()
         self._sh("shell", "am", "start", "-W", "-n", component, timeout=60)
@@ -239,6 +243,9 @@ class AndroidDriver(Driver):
         spec = AndroidAction.model_validate(action.params) if action.params else self.table.get(action.name)
         if spec is None:
             return None
+        if spec.action == "network":
+            self._set_network((spec.value or "on") != "off")
+            return self._wait_settled()
         if spec.action == "back":
             self._sh("shell", "input", "keyevent", "KEYCODE_BACK")
             return self._wait_settled()
@@ -267,10 +274,18 @@ class AndroidDriver(Driver):
             self._sh("shell", script)
         return self._wait_settled()
 
+    def _set_network(self, on: bool) -> None:
+        """Fault injection for observation: airplane mode on the device (the app's own network calls fail)."""
+        self._sh("shell", "cmd", "connectivity", "airplane-mode", "disable" if on else "enable")
+        self._network_off = not on
+        time.sleep(0.5)
+
     def actions(self) -> list[str]:
         return sorted(self.table)
 
     def close(self) -> None:
+        if self._network_off:
+            self._set_network(True)
         if self._agent_proc is not None:
             self._agent_proc.kill()
             self._agent_proc = None

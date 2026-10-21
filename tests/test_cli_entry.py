@@ -10,7 +10,7 @@ from teardown.cli import main
 @pytest.mark.parametrize("command", ["observe", "clean", "gate-serve", "remote-verify", "demo", "verify", "verify-web",
                                      "export-clean", "bench-jq", "bench-jsonl", "audit-verify", "review",
                                      "approve", "release", "egress-proxy", "cleanroom",
-                                     "observerroom"])
+                                     "observerroom", "verify-kit"])
 def test_every_subcommand_has_help(command, capsys):
     with pytest.raises(SystemExit) as exit_info:
         main([command, "--help"])
@@ -25,7 +25,7 @@ def test_dispatch_covers_every_parser():
     source = inspect.getsource(cli.main)
     for command in ["observe", "clean", "gate-serve", "remote-verify", "demo", "verify", "verify-web", "export-clean",
                     "bench-jq", "bench-jsonl", "audit-verify", "review", "approve", "release",
-                    "egress-proxy", "cleanroom", "observerroom"]:
+                    "egress-proxy", "cleanroom", "observerroom", "verify-kit"]:
         assert f'args.command == "{command}"' in source, command
 
 

@@ -71,3 +71,43 @@ def test_android_observe_probe_rule_release_verify(tmp_path):
     variant = verifier.verify(f"android:{SERIAL}:com.example.tipper.b", repeats=1)  # tip limit 60 instead of 50
     assert same.failed == 0 and same.passed > 0
     assert variant.failed > 0
+
+
+def test_android_kit_clone_is_built_installed_and_verified_and_network_fault_resets(tmp_path):
+    import re
+
+    from teardown.cleanroom import clone_package, export_kit, verify_kit
+    from teardown.drivers.android.driver import AndroidAction, AndroidDriver
+    from teardown.drivers.base import Action
+    from teardown.project import Project
+
+    project = Project(tmp_path / "p")
+    project.open_target(f"android:{SERIAL}:com.example.tipper", purpose="research", real_names=["Tipper"])
+    project.define_actions(ACTIONS)
+    rules = [{"statement": "Reset empties every field.", "checks": [
+        {"kind": "same", "a": {"actions": ["calculate"]}, "b": {"actions": ["bill_80", "reset", "calculate"]},
+         "keys": ["controls"]}]}]
+    project.check_rules("tips", rules, workers=1)
+    rel = project.release_spec(project.compile_spec("tips").id)
+    kit = tmp_path / "kit"
+    export_kit(tmp_path / "p", kit)
+    package = clone_package(rel.codename)
+    source = (Path(__file__).parents[1] / "src/teardown/examples/android/src/com/example/tipper/Main.java").read_text()
+    target = kit / "src" / package.replace(".", "/") / "Main.java"
+    target.write_text(re.sub(r"^package [\w.]+;", f"package {package};", source, flags=re.M))
+    verdict = verify_kit(project, kit, "android:kit")
+    assert verdict["failed"] == 0 and verdict["passed"] > 0
+    with pytest.raises(PermissionError):
+        verify_kit(project, kit, f"android:{SERIAL}:com.example.tipper")
+
+    driver = AndroidDriver(f"android:{SERIAL}:com.example.tipper")
+    try:
+        driver.reset()
+        driver.step(Action(name="x", params=AndroidAction(action="network", value="off").model_dump()))
+        assert subprocess.run([ADB, "-s", SERIAL, "shell", "settings", "get", "global", "airplane_mode_on"],
+                              capture_output=True, text=True).stdout.strip() == "1"
+        driver.reset()
+        assert subprocess.run([ADB, "-s", SERIAL, "shell", "settings", "get", "global", "airplane_mode_on"],
+                              capture_output=True, text=True).stdout.strip() == "0"
+    finally:
+        driver.close()

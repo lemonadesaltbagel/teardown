@@ -133,6 +133,13 @@ def main(argv: list[str] | None = None) -> int:
                      help="(check) host ports of the target, probed as unreachable")
     orr.add_argument("shell_cmd", nargs="*", metavar="CMD", help="(shell) command to run instead of bash")
 
+    vk = sub.add_parser("verify-kit", help="verify a clone built from a kit (web:kit, android:kit, cli:build:/kit)")
+    vk.add_argument("--project", required=True, type=Path)
+    vk.add_argument("--kit", required=True, type=Path)
+    vk.add_argument("--clone", required=True)
+    vk.add_argument("--adapter", type=Path)
+    vk.add_argument("--max-failures", type=int, default=40)
+
     rel = sub.add_parser("release", help="release a feature's current draft through the gate")
     rel.add_argument("--project", required=True, type=Path)
     rel.add_argument("--feature", required=True)
@@ -308,6 +315,14 @@ def main(argv: list[str] | None = None) -> int:
             return rt.shell(args.project, args.shell_cmd or None, room="observer")
         else:
             rt.down(args.project, room="observer")
+    elif args.command == "verify-kit":
+        from teardown.cleanroom import verify_kit
+        from teardown.project import Project
+
+        adapter = json.loads(args.adapter.read_text(encoding="utf-8")) if args.adapter else None
+        verdict = verify_kit(Project(args.project), args.kit, args.clone, adapter)
+        verdict["results"] = [r for r in verdict["results"] if r["status"] != "pass"][: args.max_failures]
+        print(json.dumps(verdict, indent=1, ensure_ascii=False))
     elif args.command == "release":
         from teardown.project import Project
 
@@ -403,26 +418,16 @@ def _approve(args) -> int:
 
 
 def _local_room(project, kit: Path | None = None):
-    """The gate's clean-room endpoints. With ``kit``, the clean side can only name clones built from the kit:
-    ``web:kit`` (the kit's ``impl/`` served as a static site) or ``cli:build:/kit`` (the kit's Dockerfile). Any
-    other target spec (a URL, a local command, a Python class) is refused."""
+    """The gate's clean-room endpoints. With ``kit``, the clean side can only name clones built from the kit
+    (``web:kit``, ``android:kit``, ``cli:build:/kit``; see ``verify_kit``). Any other target spec (a URL, a local
+    command, a Python class) is refused."""
     from teardown.mcp.clean_server import CleanRoom
 
     def verify(clone, adapter=None):
         if kit is not None:
-            if clone == "web:kit":
-                from teardown.drivers.web.driver import LocalSite
+            from teardown.cleanroom import verify_kit
 
-                site = LocalSite(kit / "impl", spa=True)
-                try:
-                    return project.verifier().verify("web:" + site.url(""), adapter=adapter).model_dump(mode="json")
-                finally:
-                    site.close()
-            if clone in ("cli:build:/kit", "cli:build:kit"):
-                clone = f"cli:build:{kit.resolve()}"
-            else:
-                raise PermissionError(f"this gate accepts only clones built from the kit (web:kit, cli:build:/kit), "
-                                      f"not {clone!r}")
+            return verify_kit(project, kit, clone, adapter)
         return project.verifier().verify(clone, adapter=adapter).model_dump(mode="json")
 
     return CleanRoom(project.releases_dir, project.tickets_dir, verify)

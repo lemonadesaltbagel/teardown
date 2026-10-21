@@ -121,6 +121,134 @@ def export_web_kit(project_root: Path, out: Path, rel, api: str) -> str:
     return str(out)
 
 
+ANDROID_README = """# Clean-room kit: {codename} (Android)
+
+You are implementing an Android app from a **behavioral specification**. Build it only from `spec.json` (and any
+public documents placed in this directory). Do not look for, recall or reuse an existing implementation.
+
+- `spec.json` — the released specification (release `{release}`):
+  - `actions`: UI actions by accessibility role and accessible name (`action`: click/fill/key/back/longclick/network,
+    `value`); `network` turns the device's network off/on (airplane mode).
+  - `rules`, `probe_table`, `claims`: observed behavior with the original's abstract symbols (controls by role and
+    name with state flags, visible text); `model`, `unknowns`.
+- Contract: {contract}
+- Write the app in Java (UI built in code; no resource files, no Gradle, no third-party libraries) under
+  `src/{package_path}/`, with `Main` as the launcher activity. `AndroidManifest.xml` is given: keep its package
+  (`{package}`) and launcher; add permissions or activities you need. Android API 26–34; `android.*` only.
+- `verify` (inside the enforced clean room) or `./verify.sh` builds the APK, installs it on the verification
+  device and runs the conformance suite against your build and the original. Build errors are reported back.
+"""
+
+ANDROID_MANIFEST = """<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="{package}"
+    android:versionCode="1" android:versionName="1.0">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
+    <application android:label="{codename}" android:allowBackup="false">
+        <activity android:name=".Main" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+"""
+
+ANDROID_MAIN = """package {package};
+
+import android.app.Activity;
+import android.os.Bundle;
+import android.widget.TextView;
+
+public class Main extends Activity {{
+    @Override
+    protected void onCreate(Bundle state) {{
+        super.onCreate(state);
+        TextView todo = new TextView(this);
+        todo.setText("todo");
+        setContentView(todo);
+    }}
+}}
+"""
+
+
+def clone_package(codename: str) -> str:
+    return "clone." + codename.replace("-", "_")
+
+
+def _verify_link(project_root: Path, codename: str) -> Path:
+    repo = Path(__file__).resolve().parents[2]
+    link = repo / ".teardown" / "verify" / codename
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(project_root, target_is_directory=True)
+    return link
+
+
+def export_android_kit(project_root: Path, out: Path, rel) -> str:
+    package = clone_package(rel.codename)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "spec.json").write_text(json.dumps(rel.spec, indent=1, ensure_ascii=False), encoding="utf-8")
+    (out / "README.md").write_text(ANDROID_README.format(
+        codename=rel.codename, release=rel.id, package=package, package_path=package.replace(".", "/"),
+        contract=rel.spec["testability_contract"]), encoding="utf-8")
+    if not (out / "AndroidManifest.xml").exists():
+        (out / "AndroidManifest.xml").write_text(ANDROID_MANIFEST.format(package=package, codename=rel.codename),
+                                                 encoding="utf-8")
+    main = out / "src" / package.replace(".", "/") / "Main.java"
+    if not main.exists():
+        main.parent.mkdir(parents=True, exist_ok=True)
+        main.write_text(ANDROID_MAIN.format(package=package), encoding="utf-8")
+    repo = Path(__file__).resolve().parents[2]
+    link = _verify_link(project_root, rel.codename)
+    verify = out / "verify.sh"
+    verify.write_text(f"#!/bin/sh\nset -e\nKIT=$(cd \"$(dirname \"$0\")\" && pwd)\ncd {shlex.quote(str(repo))}\n"
+                      f"uv run --quiet teardown verify-kit --project {shlex.quote(str(link))} --kit \"$KIT\" "
+                      f"--clone android:kit \"$@\"\n", encoding="utf-8")
+    verify.chmod(0o755)
+    _check_no_real_names(project_root, out)
+    return str(out)
+
+
+def verify_kit(project, kit: Path, clone: str, adapter: dict | None = None) -> dict:
+    """Verify a clone built from the kit: ``web:kit`` (static site from impl/), ``android:kit`` (APK from the kit's
+    manifest and sources, installed on the original's device), ``cli:build:/kit`` (the kit's Dockerfile)."""
+    kit = Path(kit).resolve()
+    if clone == "web:kit":
+        from teardown.drivers.web.driver import LocalSite
+
+        site = LocalSite(kit / "impl", spa=True)
+        try:
+            return project.verifier().verify("web:" + site.url(""), adapter=adapter).model_dump(mode="json")
+        finally:
+            site.close()
+    if clone == "android:kit":
+        import subprocess
+        import tempfile
+
+        from teardown.drivers.android.build import build_apk, manifest_package
+        from teardown.drivers.android.driver import adb_path
+
+        _, serial, _ = project.state.target_spec.split(":", 2)
+        package = manifest_package(kit / "AndroidManifest.xml")
+        if not package.startswith("clone."):
+            raise ValueError("the clone's package must start with 'clone.' (it must not replace the original)")
+        with tempfile.TemporaryDirectory(prefix="teardown-clone-") as tmp:
+            apk = build_apk(kit, Path(tmp) / "clone.apk")
+            cp = subprocess.run([adb_path(), "-s", serial, "install", "-r", "-t", str(apk)], capture_output=True,
+                                text=True, timeout=300)
+            if cp.returncode != 0 or "Success" not in cp.stdout:
+                raise ValueError(f"install failed: {(cp.stdout + cp.stderr)[-1000:]}")
+        options = {k: v for k, v in project.state.target_options.items() if k != "activity"}
+        adapter = {**(adapter or {}), "target_options": options}
+        return project.verifier().verify(f"android:{serial}:{package}", adapter=adapter).model_dump(mode="json")
+    if clone in ("cli:build:/kit", "cli:build:kit"):
+        return project.verifier().verify(f"cli:build:{kit}", adapter=adapter).model_dump(mode="json")
+    raise PermissionError(f"only clones built from the kit are accepted (web:kit, android:kit, cli:build:/kit), "
+                          f"not {clone!r}")
+
+
 def export_kit(project_root: Path, out: Path, api: str = "") -> str:
     project_root, out = Path(project_root).resolve(), Path(out).resolve()
     rel = load_release(project_root / "releases")
@@ -128,6 +256,8 @@ def export_kit(project_root: Path, out: Path, api: str = "") -> str:
     state = json.loads((project_root / "project.json").read_text(encoding="utf-8"))
     if state["target_spec"].startswith("web:"):
         return export_web_kit(project_root, out, rel, api)
+    if state["target_spec"].startswith("android:"):
+        return export_android_kit(project_root, out, rel)
     commands = sorted({a["argv"][0] for a in (spec.get("actions") or {}).values()})
     if len(commands) != 1:
         raise ValueError(f"kit export expects a single command, found {commands}")
