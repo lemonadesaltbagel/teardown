@@ -112,7 +112,9 @@ p.api_contract()                                                       # value-f
   (`*` stays within one path segment: that pattern hits an article but not its comments; `**` crosses segments)
   makes matching API calls *as received by the observing browser* fail for the rest of the episode; put it before
   the steps that trigger the call and state rules about what the UI then shows. Cover every important endpoint with
-  5xx, network failure and malformed-body probes. The server is never touched.
+  5xx, network failure and malformed-body probes. The server is never touched. `coverage` lists every observed
+  endpoint × fault class (5xx, network, malformed) automatically. An item counts as covered only when a probe or
+  rule sequence actually injects that fault there, and uncovered items become unknowns.
 - **Pending states**: `"mode": "hang"` holds matching calls unanswered, so the next observation shows the loading
   UI (placeholders, disabled buttons). A later `{"op": "fault", "fault": {"mode": "release", "then":
   "continue|abort|timeout|status", "status": 500}}` answers them and removes the hang.
@@ -125,7 +127,9 @@ p.api_contract()                                                       # value-f
   is observed). If the app's layout depends on a CDN stylesheet or icon font, observations differ from a real
   deployment (icons with zero size, for instance). Name those hosts in
   `target_options={"profile": {"asset_hosts": ["<cdn host>"]}}`: their stylesheets, fonts and images are fetched
-  once per process and replayed; scripts and API calls to them stay blocked. `p.blocked_hosts([actions])` lists
+  once per process and replayed; scripts and API calls to them stay blocked. Icon fonts put their private-use
+  glyphs into accessible names (a button named "\uf141 Favorite"). That is what users' assistive technology
+  gets from the real app, so observe it that way rather than leaving the font out. `p.blocked_hosts([actions])` lists
   what an episode tried to load from blocked hosts (host + resource type).
 - **Clock-dependent text**: dates rendered from server timestamps (creation times) change between observation and
   verification days. Use `p.set_mapper(params={"mask_dates": True})` before probing when the app shows them;

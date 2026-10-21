@@ -300,3 +300,18 @@ def test_reopening_keeps_work_cannot_relax_strict_and_rules_can_be_retracted(sit
     assert project.retract_rule("quotes", rid, "superseded") == 0
     with pytest.raises(KeyError):
         project.retract_rule("quotes", rid, "again")
+
+
+def test_coverage_lists_every_observed_endpoint_by_fault_class(site, tmp_path):
+    project = Project(tmp_path / "p")
+    project.open_target("web:" + site.url("fetcher.html"), purpose="research")
+    project.define_actions({"load": {"op": "click", "role": "button", "name": "Load quotes"},
+                            "offline": {"op": "fault", "fault": {"path": "/quotes.json", "mode": "abort"}},
+                            "broken": {"op": "fault", "fault": {"path": "/quotes.json", "mode": "malformed"}}})
+    project.check_rules("quotes", [{"statement": "Offline loads show an alert.",
+                                    "checks": [{"kind": "outcome", "a": {"actions": ["offline", "load"]},
+                                                "expect": {"alerts": ["Offline"]}}]}], workers=1)
+    report = project.coverage("quotes", record_unknowns=False)
+    faults = {k: v for k, v in report["counts"].items() if k.startswith("fault ")}
+    assert faults == {"fault GET /quotes.json 5xx": 0, "fault GET /quotes.json network": 1,
+                      "fault GET /quotes.json malformed": 0}  # 'broken' is defined but never used

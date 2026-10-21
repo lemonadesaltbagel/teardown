@@ -775,6 +775,9 @@ class Project:
 
         counts = {item: sum(any(exercises(a, pat) for pat in patterns) for a in actions)
                   for item, patterns in items.items()}
+        if state.target_spec.startswith("web:"):
+            counts.update(self._fault_coverage(feature, table))
+            items.update({k: [] for k in counts if k not in items})
         uncovered = sorted(i for i, n in counts.items() if n == 0)
         self._save(self.state.model_copy(update={"coverage": {**self.state.coverage, feature: {
             "items": len(items), "uncovered": uncovered}}}))
@@ -785,6 +788,42 @@ class Project:
         self.audit.append("coverage", {}, {"feature": feature, "items": len(items), "uncovered": len(uncovered)})
         return {"items": len(items), "covered": len(items) - len(uncovered), "uncovered": uncovered,
                 "counts": counts}
+
+    FAULT_CLASSES = {"5xx": "a server error", "network": "a network failure or timeout",
+                     "malformed": "a malformed body"}
+
+    def _fault_coverage(self, feature: str, table: Any) -> dict[str, int]:
+        """Web: every observed API endpoint x fault class (5xx, network, malformed) -> how many probe or rule
+        sequences inject that fault there. Only faults actually used in a sequence count, not merely defined ones."""
+        from teardown.drivers.web.driver import path_glob
+        from teardown.engine.rules import RuleTable
+
+        state = self.state
+        used: list[list[str]] = [[*r.prefix, r.action] for r in (table.rows if table else [])]
+        if feature in state.rules:
+            for rule in self.workspace.get(state.rules[feature], RuleTable).rules:
+                used += [c.a_inputs or [] for c in rule.checks] + [c.b_inputs or [] for c in rule.checks]
+        named = self.action_table()
+        faults: list[dict[str, Any]] = []
+        for seq in used:
+            faults += [named[n]["fault"] for n in seq if named.get(n, {}).get("op") == "fault"
+                       and (named[n].get("fault") or {}).get("mode") != "release"]
+
+        def fault_class(f: dict[str, Any]) -> str | None:
+            mode = f.get("mode", "status")
+            if mode == "status":
+                return "5xx" if int(f.get("status", 500)) >= 500 else None
+            return {"abort": "network", "timeout": "network", "hang": None, "malformed": "malformed"}.get(mode)
+
+        counts: dict[str, int] = {}
+        for path, methods in self.api_contract()["paths"].items():
+            bare = path.split("?", 1)[0]
+            for method in methods:
+                for cls in self.FAULT_CLASSES:
+                    counts[f"fault {method.upper()} {bare} {cls}"] = sum(
+                        1 for f in faults if fault_class(f) == cls and path_glob(f.get("path", "**"))(bare)
+                        and (not f.get("method") or f["method"].upper() == method.upper()))
+        return counts
 
     # -- rules ---------------------------------------------------------------------------------------------------
     def check_rules(self, feature: str, rules: list[dict[str, Any]], workers: int = 4) -> dict[str, Any]:
