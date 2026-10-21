@@ -227,10 +227,13 @@ class WebDriver(Driver):
 
             def gate(route):
                 host = urlparse(route.request.url).hostname
-                if host in allowed or route.request.url.startswith(("data:", "blob:")):
-                    route.continue_()
-                else:
-                    route.abort()
+                try:
+                    if host in allowed or route.request.url.startswith(("data:", "blob:")):
+                        route.continue_()
+                    else:
+                        route.abort()
+                except Exception:  # noqa: BLE001 - page/context closed meanwhile: the request is gone anyway
+                    pass
 
             self._ctx.route("**/*", gate)
         self.page = self._ctx.new_page()
@@ -344,6 +347,12 @@ class WebDriver(Driver):
             return
 
         def handler(route):
+            try:
+                return answer(route)
+            except Exception:  # noqa: BLE001 - page/context closed meanwhile: the request is gone anyway
+                return None
+
+        def answer(route):
             req = route.request
             path = urlparse(req.url).path
             if req.resource_type not in ("xhr", "fetch") or not fnmatch.fnmatch(path, pattern) or (
