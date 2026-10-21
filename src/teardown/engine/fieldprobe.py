@@ -10,6 +10,7 @@ were inputs).
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -52,6 +53,24 @@ def layer_of(result: dict[str, Any]) -> str:
     return "unknown"
 
 
+def slug(text: str) -> str:
+    """URL-slug form of a value (as apps derive routes from titles and names)."""
+    import unicodedata
+
+    flat = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "-", flat.lower()).strip("-")
+
+
+def _echo_patterns(echo: str | None) -> list[re.Pattern]:
+    """The typed value and its slug, matched as whole words (needles shorter than 3 characters are not masked:
+    replacing a one-letter value would rewrite unrelated text)."""
+    if not echo or not echo.strip():
+        return []
+    needles = {echo.strip(), slug(echo.strip())}
+    return [re.compile(rf"(?<![\w]){re.escape(n)}(?![\w])") for n in sorted(needles, key=len, reverse=True)
+            if len(n) >= 3]
+
+
 def outcome(symbol: Any, echo: str | None = None) -> dict[str, Any]:
     """Acceptance-deciding part of a web.aria symbol (keys absent from the symbol stay absent).
 
@@ -61,9 +80,16 @@ def outcome(symbol: Any, echo: str | None = None) -> dict[str, Any]:
     if not isinstance(symbol, dict):
         return {"value": symbol}
     out = {k: symbol[k] for k in OUTCOME_KEYS if k in symbol}
-    if echo and echo.strip():
-        needle = echo.strip()
-        out = {k: [x.replace(needle, "<input>") if isinstance(x, str) else x for x in v] if isinstance(v, list) else v
+    patterns = _echo_patterns(echo)
+    if patterns:
+        def mask(x: Any) -> Any:
+            if not isinstance(x, str):
+                return x
+            for p in patterns:
+                x = p.sub("<input>", x)
+            return x
+
+        out = {k: [mask(x) for x in v] if isinstance(v, list) else mask(v) if k == "path" else v
                for k, v in out.items()}
     if "alerts" not in out:
         out["alerts"] = []  # absence of alerts is part of the outcome; web.aria omits the key when empty

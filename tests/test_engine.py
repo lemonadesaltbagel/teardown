@@ -66,3 +66,14 @@ def test_claims_are_corroborated_or_falsified_by_fresh_probes(signup_session, wo
     falsified = ledger.falsify(false_claim.id, signup_session)
     assert falsified.status == "falsified" and falsified.contradicting == 3 and falsified.counterexamples
     assert AuditLog(tmp_path / "audit.jsonl").verify() == 4
+
+
+def test_field_outcomes_mask_the_typed_value_and_its_slug_but_not_short_values():
+    from teardown.engine.fieldprobe import outcome
+
+    a = outcome({"path": "/article/hello-world", "headings": ["Hello World"],
+                 "network": ["GET /api/articles/hello-world 200"]}, "Hello World")
+    b = outcome({"path": "/article/another-title", "headings": ["Another Title"],
+                 "network": ["GET /api/articles/another-title 200"]}, "Another Title")
+    assert a == b  # two accepted titles have the same outcome once their echo is masked
+    assert outcome({"text": ["a cat"]}, "a")["text"] == ["a cat"]
