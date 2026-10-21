@@ -1,9 +1,13 @@
 # Agent workspace for the enforced rooms (Claude Code + Teardown): the implementer in the clean room, the observer
 # in the observer room. The container sees one directory; its only network peer is the egress proxy.
 FROM node:22-slim AS node
+FROM eclipse-temurin:21-jdk AS jdk
 FROM python:3.12-slim
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+# javac for Android clones (compile-check against the SDK stub mounted at /opt/android/android.jar)
+COPY --from=jdk /opt/java/openjdk /opt/java/openjdk
+ENV JAVA_HOME=/opt/java/openjdk PATH=/opt/java/openjdk/bin:$PATH
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
  && npm install -g --no-fund --no-audit @anthropic-ai/claude-code \

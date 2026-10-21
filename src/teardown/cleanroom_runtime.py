@@ -114,6 +114,10 @@ def up(project: Path, kit: Path, *, allow: list[str] | None = None, api: str | N
         kit_api = api.replace(f"//{u.hostname}", f"//{host}", 1)
     env = {"KIT": str(kit), "GATE_URL": f"http://{HOST_ALIAS}:{port}", "GATE_TOKEN": token, "CLONE": clone,
            "EGRESS_ALLOW": " ".join(egress), "CLEANROOM_LOG": str(state_dir), "KIT_API_URL": kit_api}
+    if clone == "android:kit":  # javac in the container compiles against the SDK's public stub
+        from teardown.drivers.android.build import sdk_paths
+
+        env["ANDROID_PLATFORM"] = str(sdk_paths()[1].parent)
     _bring_up(project, "clean", gate, env, {"port": port, "token": token, "kit": str(kit)}, claude_token_file, build)
     return {"gate": f"http://127.0.0.1:{port}", "egress_allow": egress, "kit": str(kit), "log": str(state_dir)}
 

@@ -137,6 +137,8 @@ public documents placed in this directory). Do not look for, recall or reuse an 
   (`{package}`) and launcher; add permissions or activities you need. Android API 26–34; `android.*` only.
 - `verify` (inside the enforced clean room) or `./verify.sh` builds the APK, installs it on the verification
   device and runs the conformance suite against your build and the original. Build errors are reported back.
+- To compile-check locally (in the clean room): `javac --release 11 -cp /opt/android/android.jar -d /tmp/classes
+  $(find src -name '*.java')`. There is no device or emulator on the clean side.
 """
 
 ANDROID_MANIFEST = """<?xml version="1.0" encoding="utf-8"?>

@@ -38,6 +38,8 @@ services:
       HOME: /home/clean
     volumes:
       - ${KIT:?set KIT}:/kit
+      # Android clones: the SDK's public android.jar stub, for local compile checks (empty otherwise)
+      - ${ANDROID_PLATFORM:-./clean/no-android}:/opt/android:ro
     networks: [cleanroom]
     read_only: true
     tmpfs: [/tmp, "/home/clean:uid=1000,gid=1000"]
