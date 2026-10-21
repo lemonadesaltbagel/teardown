@@ -123,10 +123,22 @@ novel tool with an independent observer agent: **spec arm 397/397**, hybrid (spe
 - [x] DSSE-signed audit entries (ed25519 per zone) + chain verification.
 - [x] Winnowing near-verbatim detection; functional-quote approval; strict-mode coverage gate.
 - [x] Stack traces redacted at capture.
-- [ ] Egress proxy for model API access from the clean zone; registry mirror with block list; managed settings
-  template for agents inside the clean container.
+- [x] Strict gate for one developer: classified findings (expected-output / interface / prose), recorded
+  approvals (class scope only for functional classes), terminal-only `teardown approve`, no approvals through
+  the observer's MCP tools (`docs/strict-gate.md`).
+- [x] Enforced clean room on one machine (`teardown cleanroom up/check/shell/down`): kit-only gate (clone target
+  allowlist), allowlisting egress proxy with a per-attempt log, clean image with Claude Code and managed settings,
+  isolation probes (8/8) (`docs/clean-runtime.md`).
+- [ ] Full rounds with the implementer inside the clean room (web: running; CLI: next).
+- [ ] Package registry mirror with a block list (for implementations that may use third-party packages).
 - [ ] MinHash, distinctiveness scoring, auto-built identifier denylist, advisory LLM judge, review UI.
 - [ ] Memorization probes and spec canaries; post-hoc similarity reports (Dolos/JPlag/PDQ); RFC 3161 checkpoints.
+
+## Release readiness (CLI + web)
+
+- [x] README and docs match the code; evaluation method documented (`docs/evaluation.md`).
+- [x] Fresh clone: `uv sync`, `teardown demo`, test suite pass. CI workflow (lint + tests).
+- [ ] License (owner's decision) and the go-ahead to publish.
 
 ## Phase 4: Android (L)
 

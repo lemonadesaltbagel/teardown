@@ -1,14 +1,15 @@
 name: ci
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - run: uv sync --python ${{ matrix.python }}
+      - run: uv sync
       - run: uv run ruff check src tests
-      - run: uv run pytest -q
+      - run: uv run playwright install --with-deps chromium
+      # Android and Linux-desktop tests need an emulator / a prebuilt agent image; they run locally.
+      - run: uv run pytest -q --ignore=tests/test_android.py --ignore=tests/test_desktop.py
