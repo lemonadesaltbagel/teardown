@@ -28,6 +28,7 @@ services:
       http_proxy: http://egress:3128
       https_proxy: http://egress:3128
       NO_PROXY: ""
+      NODE_USE_ENV_PROXY: "1"  # Node's fetch honours HTTP(S)_PROXY only with this set
       TEARDOWN_GATE_URL: ${GATE_URL:?set GATE_URL}
       TEARDOWN_GATE_TOKEN: ${GATE_TOKEN:?set GATE_TOKEN}
       TEARDOWN_CLONE: ${CLONE:-web:kit}
