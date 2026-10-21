@@ -131,6 +131,9 @@ novel tool with an independent observer agent: **spec arm 397/397**, hybrid (spe
   isolation probes (8/8) (`docs/clean-runtime.md`).
 - [x] Full rounds with the implementer inside the clean room: web 99/101, CLI 397/397, matching the
   prompt-only rounds; only allowlisted egress (`research/13-enforced-clean-room-rounds.md`).
+- [x] Observer room: the observer agent confined to the observe MCP server (HTTP) and a scratch workspace; the
+  target is never in its egress allowlist (11 isolation probes). Round 6 with both sides confined: 93/101
+  (`research/13`); its gaps led to automatic endpoint x fault coverage.
 - [ ] Package registry mirror with a block list (for implementations that may use third-party packages).
 - [ ] MinHash, distinctiveness scoring, auto-built identifier denylist, advisory LLM judge, review UI.
 - [ ] Memorization probes and spec canaries; post-hoc similarity reports (Dolos/JPlag/PDQ); RFC 3161 checkpoints.

@@ -59,3 +59,54 @@ environment rather than the prompt?
 Enforcing the barrier cost nothing in outcome: both rounds matched their prompt-only results. The two implementers
 needed one verify call each, and neither could have reached the original, the project or the internet. This
 closes the M2 exit criterion (an implementer running inside the clean room, isolation shown, rounds scoring).
+
+## Round 6: both sides confined
+
+*Project `.teardown/obs-web6`, kit `.teardown/cleanroom/web-r6` (codename indigo-meadow). Observer room:
+`teardown observerroom` (`e45355f`).*
+
+- **Observer.**
+  - A fresh agent in the observer room (Opus 5.5). Its only tools were the observe MCP server over HTTP and a
+    scratch workspace holding the guide and the public `SELECTORS.md`. It had no earlier scripts.
+  - Isolation probes: 11/11 before the run. During the run, egress contained only MCP calls (89) and the model
+    API.
+  - It worked for 29 minutes entirely through MCP and released 42 rules (40 corroborated, 2 contested),
+    64 probe rows, 37 claims and 10 unknowns, with 65/65 of *its own* inventory covered.
+- **Implementer.** A fresh agent in the clean room with the round-5 prompt. It used 1 verify call and passed
+  198/198 conformance tests.
+
+| | hidden suite (pinned 101) |
+|---|---|
+| Round 4 (observer and implementer confined by prompt) | 99 |
+| Round 5 (round-4 spec, implementer confined) | 99 |
+| **Round 6 (both confined)** | **93** |
+
+The 8 extra failures trace to the observer's choices, not to the barrier:
+
+- **Comment deletion (3).**
+  - `blocked_hosts` reported the icon CDN, but the observer left it out of `asset_hosts`: it took the icon
+    glyphs in accessible names for a defect.
+  - Icons were zero-size during observation, so the clone's delete icon is too.
+  - The guide now says the glyphs are real behavior.
+- **The app starting while the server is down (5).**
+  - The observer injected only a 401 on the current-user endpoint, never a 5xx, a network failure or a
+    malformed body.
+  - The guide asked for these on every important endpoint, but nothing measured it.
+  - `coverage` now lists every observed endpoint × fault class (`556a0ff`). On this project it reports 30
+    uncovered items, including exactly these three.
+
+**Bugs the MCP-only observer surfaced, all fixed** (`6e14f76`, `d6012c0`):
+- tool errors arrived without their message;
+- dotted keys made `same` checks pass vacuously;
+- reopening a target dropped all actions, and could relax strict mode;
+- rules could not be retracted;
+- `valid=` rejected literal values;
+- accepted titles were mined as "refused" because their slugs differed.
+
+**Reading.**
+- The barrier costs nothing by itself: round 5 matched round 4.
+- Confining the observer to MCP did cost spec volume in this run: 42 rules against 85, in 29 minutes. Round 6's
+  observer started from nothing, where rounds 2–4 started from earlier observers' scripts. The spec's gaps were
+  in coverage, which tooling can now make visible.
+- The two fixes above were informed by the hidden suite's failures, so a re-run would be another
+  development-set number.
