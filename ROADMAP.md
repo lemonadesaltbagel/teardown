@@ -129,7 +129,8 @@ novel tool with an independent observer agent: **spec arm 397/397**, hybrid (spe
 - [x] Enforced clean room on one machine (`teardown cleanroom up/check/shell/down`): kit-only gate (clone target
   allowlist), allowlisting egress proxy with a per-attempt log, clean image with Claude Code and managed settings,
   isolation probes (8/8) (`docs/clean-runtime.md`).
-- [ ] Full rounds with the implementer inside the clean room (web: running; CLI: next).
+- [x] Full rounds with the implementer inside the clean room: web 99/101, CLI 397/397, matching the
+  prompt-only rounds; only allowlisted egress (`research/13-enforced-clean-room-rounds.md`).
 - [ ] Package registry mirror with a block list (for implementations that may use third-party packages).
 - [ ] MinHash, distinctiveness scoring, auto-built identifier denylist, advisory LLM judge, review UI.
 - [ ] Memorization probes and spec canaries; post-hoc similarity reports (Dolos/JPlag/PDQ); RFC 3161 checkpoints.
