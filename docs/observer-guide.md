@@ -121,5 +121,8 @@ p.api_contract()                                                       # value-f
   deployment (icons with zero size, for instance). Name those hosts in
   `target_options={"profile": {"asset_hosts": ["<cdn host>"]}}`: their stylesheets, fonts and images are fetched
   once per process and replayed; scripts and API calls to them stay blocked.
+- **Clock-dependent text**: dates rendered from server timestamps (creation times) change between observation and
+  verification days. Use `set_mapper("web.aria/v1", {"mask_dates": True})` before probing when the app shows them;
+  `compile_spec` records an unknown if expected text contains dates while they are not masked.
 - Route and network symbols include query strings (`/?feed=following`, `GET /api/articles?limit=10&offset=0`):
   state rules about pagination and filters through them.

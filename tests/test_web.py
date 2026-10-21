@@ -210,3 +210,25 @@ def test_profile_overrides_reach_the_driver():
 
     d = open_driver("web:http://127.0.0.1:9/", None, {"profile": {"asset_hosts": ["cdn.example"]}})
     assert d.profile.asset_hosts == ["cdn.example"] and d.profile.block_external
+
+
+def test_clock_dates_are_flagged_as_unknown_until_masked(tmp_path):
+    root = tmp_path / "site"
+    root.mkdir()
+    (root / "post.html").write_text('<!doctype html><html lang="en"><body><main><h1>Post</h1>'
+                                    "<p>Published October 20, 2026</p></main></body></html>")
+    site = LocalSite(root)
+    try:
+        project = Project(tmp_path / "p")
+        project.open_target("web:" + site.url("post.html"), purpose="research")
+        project.define_actions({"stay": {"op": "goto", "value": "post.html"}})
+        rules = [{"statement": "The post shows its date.",
+                  "checks": [{"kind": "outcome", "a": {"actions": ["stay"]},
+                              "expect": {"text": ["Published October 20, 2026"]}}]}]
+        project.check_rules("post", rules, workers=1)
+        draft = project.compile_spec("post")
+        assert any("calendar dates" in u.identity.question for u in draft.unknowns)
+        assert web_aria({"aria": '- paragraph: Published October 20, 2026', "path": "/"},
+                        {"mask_dates": True})["text"] == ["Published <date>"]
+    finally:
+        site.close()

@@ -120,6 +120,13 @@ def parse_aria(snapshot: str) -> list[dict[str, Any]]:
     return nodes
 
 
+_MONTHS = ("January|February|March|April|May|June|July|August|September|October|November|December|"
+           "Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec")
+CALENDAR_DATE = re.compile(rf"\b(?:(?:{_MONTHS})\.? \d{{1,2}}(?:st|nd|rd|th)?,? \d{{4}}"
+                           rf"|\d{{1,2}} (?:{_MONTHS})\.? \d{{4}}"
+                           r"|\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?Z?)?)\b")
+
+
 def web_aria(observation: Any, params: dict[str, Any]) -> Any:
     """Structured, wording-agnostic view of an accessibility snapshot.
 
@@ -128,6 +135,8 @@ def web_aria(observation: Any, params: dict[str, Any]) -> Any:
     ``controls`` (role:name -> state flags; textbox values reduced to
     filled/empty so secrets never reach symbols), ``invalid`` (form controls failing constraint validation) and
     ``contract`` (state of each selector named by a public markup contract, when the target supplies one).
+    ``mask_dates`` (param) replaces calendar dates in headings, alerts and text with ``<date>``: dates shown from a
+    server clock (creation times) drift between observation and verification.
     Mapper rules then classify the remaining text into semantic classes.
     """
     if not isinstance(observation, dict) or "aria" not in observation:
@@ -162,6 +171,9 @@ def web_aria(observation: Any, params: dict[str, Any]) -> Any:
         out["network"] = [f"{m} {p} {s}" for m, p, s in observation["network"]]
     if observation.get("contract"):  # public-contract selectors: absent | hidden | empty | content
         out["contract"] = dict(sorted(observation["contract"].items()))
+    if params.get("mask_dates"):
+        for key in ("headings", "alerts", "text"):
+            out[key] = [CALENDAR_DATE.sub("<date>", t) for t in out[key]]
     for key in ("alerts", "text"):
         if not out[key]:
             out.pop(key)

@@ -333,6 +333,25 @@ class Project:
     def falsify_claim(self, claim_id: str, repeats: int = 3):
         return self.ledger.falsify(claim_id, self.session(), repeats=repeats)
 
+    def _flag_clock_text(self, feature: str, probes: Any, rule_table: Any) -> None:
+        """Calendar dates in expected UI text usually come from a clock (server creation times) and drift between
+        observation and verification. Unless the abstraction masks them, say so as an unknown."""
+        if not self.state.target_spec.startswith("web:"):
+            return
+        version = self.workspace.get(self.state.mapper, MapperVersion)
+        if version.builtin != "web.aria/v1" or (version.params or {}).get("mask_dates"):
+            return
+        from teardown.engine.abstractions import CALENDAR_DATE
+
+        blob = " ".join(json.dumps(x.model_dump(mode="json")) for x in (probes, rule_table) if x is not None)
+        dates = sorted(set(CALENDAR_DATE.findall(blob)))
+        if dates:
+            self.ledger.record_unknown(
+                feature, f"Expected UI text contains calendar dates ({', '.join(dates[:3])}): if they come from a "
+                         "clock (e.g. creation times) they drift and verification turns inconclusive; mask them "
+                         "(web.aria/v1 param mask_dates) or confirm they are fixed data.",
+                ["re-run a date-bearing check on another day", "set_mapper('web.aria/v1', {'mask_dates': true})"])
+
     def compile_spec(self, feature: str) -> SpecDraft:
         state = self.state
         feature_claims = [c for c in self.ledger.all().values() if c.identity.feature == feature]
@@ -344,6 +363,7 @@ class Project:
         from teardown.engine.rules import RuleTable
 
         rule_table = self.workspace.get(state.rules[feature], RuleTable) if feature in state.rules else None
+        self._flag_clock_text(feature, probes, rule_table)
         version = self.workspace.get(state.mapper, MapperVersion)
         abstraction = {"builtin": version.builtin, "params": version.params} if version.builtin else {}
         claims = [c for c in self.ledger.all().values() if c.identity.feature == feature]
