@@ -113,11 +113,55 @@ names exactly these selectors, so the fix is generic and stays at the behavior t
 - Process slips reported by the implementer: it listed a browser cache folder outside the kit (nothing used), and it
   created a probe user and two articles through the API (the database is reset before every run).
 
+## Round 3: contract selectors + pending states
+
+*Kit: `.teardown/cleanroom/web-r3/`, project `.teardown/obs-web3`.*
+
+Tooling added after round 2 (`2774d1d`): `contract_selectors` (per public-contract selector: absent / hidden /
+empty / content, carried into the spec as `markup_contract`) and `hang`/`release` faults for pending states. These
+were designed against round 2's failures, so round 3 is a **development-set number** for those features, not a
+held-out one. The guide describes them generically; neither the observer nor the implementer prompt mentions any
+hidden-suite behavior.
+
+- **Observer.** Fresh agent, neutral prompt, given the round-2 scripts and a copy of the public `SELECTORS.md`.
+  Released 77 rules (all corroborated; 17 new on contract states and loading states), 145 probe rows, 58 claims,
+  15 unknowns, 115/122 inventory items, 58 contract selectors.
+- **Clean implementer.** Fresh agent, the same instructions word for word. About 1,330 lines; 1 of 6 verify calls.
+
+| | Round 1 | Round 2 | Round 3 |
+|---|---|---|---|
+| Teardown conformance | 342 / 342 | 438 / 438 | 479 passed, 0 failed, 45 inconclusive |
+| Hidden RealWorld E2E (pinned 101) | 80 | 93 | **95 / 101 (94.1%)** |
+
+- **Fixed:** the 6 page-wrapper tests (failed article/profile loads), via contract states.
+- **New failures (4):** deleting a comment (3 tests) and removing editor tag pills (1). Cause: Teardown blocks
+  third-party hosts, and the original loads its icon font from a CDN. During observation every icon had zero size,
+  so the spec recorded the delete and tag-remove icons as *hidden*, and the clone faithfully rendered zero-size
+  icons. The hidden suite runs without blocking and clicks those icons. Round 2's clone passed them by accident (its
+  icons happened to have a size). Fix (`66acd8a`): `profile.asset_hosts` fetches stylesheets, fonts and images from
+  named hosts once per process and replays them; scripts and API calls stay blocked.
+- **Still failing (2):** the empty-bio tests read `.user-info p`. The public contract names `.user-info` ("username,
+  bio, avatar section") but no paragraph element, so this structure is beyond the contract and out of reach by
+  design: Teardown observes only contract-named selectors.
+- **45 inconclusive:** not clone failures. Editor probes publish an article, whose page shows the server's creation
+  date; they were recorded on Oct 20 and replayed after midnight UTC. Browser determinism does not cover a server
+  clock. Fix (`dbe3838`): `web.aria/v1` param `mask_dates`, and `compile_spec` records an unknown when expected text
+  contains unmasked dates.
+- **Bugs found and fixed:** `release` with `then: "continue"` failed ("Route is already handled", `b260014`), and a
+  blocked request racing with context close crashed `verify-web` (`98bae05`).
+- The implementer again recognized the app; process slip: one scratch file written to the session scratchpad
+  (text extracted from `spec.json` only).
+
+Expected effect of the two fixes on a round 4: +4 (icons) with nothing else changing, i.e. 99/101, with the
+remaining 2 outside the public contract. Not measured yet.
+
 ## Next
 
 - [x] Query strings in route and network symbols.
 - [x] Fault-injection probes for web (5xx, abort, timeout, malformed body). CLI (I/O faults) and Android (network
   off) remain.
 - [x] Re-run Conduit with both fixes: 93/101 (target was ≥ 95).
-- [ ] Contract-selector observations (presence/visibility/emptiness of public-contract selectors), then re-run.
-- [ ] Injected timeouts that actually hang, so pending-state UI is observable.
+- [x] Contract-selector observations (presence/visibility/emptiness of public-contract selectors), then re-run:
+  95/101.
+- [x] Injected timeouts that actually hang, so pending-state UI is observable (`hang`/`release`).
+- [ ] Round 4 with `asset_hosts` and `mask_dates` (expected 99/101).

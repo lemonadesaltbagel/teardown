@@ -105,7 +105,9 @@ novel tool with an independent observer agent: **spec arm 397/397**, hybrid (spe
   are empty elements (page wrapper after a failed load, empty bio) that the accessibility view cannot see.
 - [x] Contract-selector observations (`contract_selectors` with a public source): absent/hidden/empty/content.
 - [x] `hang` / `release` faults: calls held pending so loading/disabled states are observable.
-- [ ] Conduit round 3 with both (target ≥ 95/101).
+- [x] Conduit round 3 with both: 95/101 (target met). Found: CDN icon fonts blocked during observation (fixed:
+  `profile.asset_hosts`), server-clock dates drifting across days (fixed: `mask_dates` + compile-time unknown).
+- [ ] Conduit round 4 with `asset_hosts` + `mask_dates` (expected 99/101; the last 2 need DOM beyond the contract).
 - [ ] CDP coverage for exploration steering; APE-style state-key refinement; HAR freeze for 3-way layering.
 - [ ] TodoMVC benchmark; SaaS limited-reset mode.
 - **Exit:** Conduit clone from a Teardown web spec + the public selectors contract, scored on the hidden E2E
