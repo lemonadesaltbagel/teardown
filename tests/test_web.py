@@ -261,3 +261,11 @@ def test_api_contract_folds_declared_templates_and_query_values():
     assert _contract_path("/api/articles/feed?limit=10&offset=0", templates) == "/api/articles/feed?limit={}&offset={}"
     assert _contract_path("/api/articles/x/comments", templates) == "/api/articles/{slug}/comments"
     assert _contract_path("/api/tags", templates) == "/api/tags"
+
+
+def test_fault_path_globs_respect_segments():
+    from teardown.drivers.web.driver import path_glob
+
+    article = path_glob("/api/articles/*")
+    assert article("/api/articles/my-post") and not article("/api/articles/my-post/comments")
+    assert path_glob("/api/**")("/api/articles/x/comments") and path_glob("/quotes.json")("/quotes.json")

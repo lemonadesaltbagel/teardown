@@ -43,7 +43,8 @@ class WebAction(BaseModel):
     name_regex: bool = False
     value: str | None = None
     fault: dict[str, Any] | None = Field(
-        default=None, description="op=fault: {path: glob on the API path, mode: status|abort|timeout|malformed|hang, "
+        default=None, description="op=fault: {path: glob on the API path ('*' within a segment, '**' across), "
+                                  "mode: status|abort|timeout|malformed|hang, "
                                   "status: int, method: optional}. Applies to the rest of the episode. 'hang' holds "
                                   "matching requests pending (loading states become observable) until a later "
                                   "{mode: release, then: continue|abort|timeout|status, status: int}.")
@@ -184,6 +185,27 @@ def json_shape(value: Any, depth: int = 0) -> Any:
     if value is None:
         return "null"
     return "string"
+
+
+def path_glob(pattern: str):
+    """Path glob -> predicate: ``*`` and ``?`` stay within one segment, ``**`` crosses segments
+    (``/api/articles/*`` matches an article, not its comments; ``/api/**`` matches everything below)."""
+    out, i = [], 0
+    while i < len(pattern):
+        if pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    regex = re.compile("".join(out) + r"\Z")
+    return lambda path: regex.match(path) is not None
 
 
 class ResetFailed(RuntimeError):
@@ -389,9 +411,8 @@ class WebDriver(Driver):
     def _install_fault(self, fault: dict[str, Any]) -> None:
         """Fault injection for observation: matching XHR/fetch responses *as received by this browser* are replaced
         (status, network abort, timeout, malformed JSON). The server is never touched."""
-        import fnmatch
-
-        pattern, mode = fault.get("path", "*"), fault.get("mode", "status")
+        pattern, mode = fault.get("path", "**"), fault.get("mode", "status")
+        matches = path_glob(pattern)
         method = (fault.get("method") or "").upper()
         if mode == "release":
             self._release(fault)
@@ -406,7 +427,7 @@ class WebDriver(Driver):
         def answer(route):
             req = route.request
             path = urlparse(req.url).path
-            if req.resource_type not in ("xhr", "fetch") or not fnmatch.fnmatch(path, pattern) or (
+            if req.resource_type not in ("xhr", "fetch") or not matches(path) or (
                     method and req.method != method):
                 return route.fallback()
             if mode == "abort":

@@ -155,6 +155,44 @@ hidden-suite behavior.
 Expected effect of the two fixes on a round 4: +4 (icons) with nothing else changing, i.e. 99/101, with the
 remaining 2 outside the public contract. Not measured yet.
 
+## Round 4: CDN assets replayed, dates masked
+
+*Kit: `.teardown/cleanroom/web-r4/` (codename ember-quarry), project `.teardown/obs-web4`.*
+
+Tooling added after round 3: `profile.asset_hosts` (third-party stylesheets/fonts/images fetched once and replayed,
+on-disk cache `a722b73`), `blocked_hosts()` so the observer can see what the app tried to load (`21a6525`), and
+`mask_dates` with a compile-time unknown (`dbe3838`). Again a development-set number for these features.
+
+- **Observer.** Fresh agent, neutral prompt, round-3 scripts. It found the CDN hosts with `blocked_hosts`, set
+  `asset_hosts` and `mask_dates`. Released 85 rules (all corroborated), 146 probe rows, 58 claims, 9 unknowns,
+  127/134 inventory items. With the icon font loaded, accessible names carry the font's private-use glyphs
+  (e.g. U+F141 on the favorite button), as they do in a real browser.
+- **Clean implementer.** Fresh agent, same instructions. About 1,430 lines; it reproduced the glyphs in its own
+  CSS (no third-party assets). 3 of 6 verify calls used; 2 of them crashed while loading the *original* (a CDN fetch
+  stalled past the page-load timeout); fixed by the on-disk asset cache and a fetch timeout (`a722b73`).
+- **Baseline re-check.** After an API container restart, the original again passes 101 and fails the same 22.
+
+| | Round 1 | Round 2 | Round 3 | Round 4 |
+|---|---|---|---|---|
+| Teardown conformance | 342 / 342 | 438 / 438 | 479 / 0 / 45 inconclusive | **576 / 576** |
+| Hidden RealWorld E2E (pinned 101) | 80 | 93 | 95 | **99 / 101 (98.0%)** |
+
+- The 4 icon tests (comment delete, tag removal) pass again; the 45 date inconclusives are gone.
+- The remaining 2 are the empty-bio tests, which read `.user-info p`, an element the public contract does not
+  name. Closing them would mean observing DOM structure beyond the published contract, which Teardown does not do.
+- Observer-reported issues, all fixed: `set_mapper` had no way to set built-in params (`set_mapper(params=...)`),
+  no API to retire answered unknowns (`update_unknown`), the API contract leaked slugs and user names
+  (`api_templates`, query values dropped), `audit.append` failed on list subjects, the kit did not name its asset
+  hosts, and fault globs let `*` cross `/` (`path_glob`: `*` within a segment, `**` across).
+
+### Summary of the Conduit series
+
+Each round changed only the tooling (and the guide's generic description of it); observer and implementer prompts
+stayed fixed and never named hidden-suite behavior. Every gap the hidden suite exposed was a capability gap in
+observation, not in the spec format or the clean side: query strings, faults, empty structure, the environment's
+third-party assets, and a server clock. Because the tooling was developed against these failures, 99/101 is a
+development-set result; the next measurement should be a web app the tooling has not been tuned on.
+
 ## Next
 
 - [x] Query strings in route and network symbols.
@@ -164,4 +202,5 @@ remaining 2 outside the public contract. Not measured yet.
 - [x] Contract-selector observations (presence/visibility/emptiness of public-contract selectors), then re-run:
   95/101.
 - [x] Injected timeouts that actually hang, so pending-state UI is observable (`hang`/`release`).
-- [ ] Round 4 with `asset_hosts` and `mask_dates` (expected 99/101).
+- [x] Round 4 with `asset_hosts` and `mask_dates`: 99/101 (as expected).
+- [ ] A held-out web app (not used while developing the web tooling) with its own hidden suite.

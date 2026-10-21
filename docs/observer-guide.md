@@ -108,7 +108,8 @@ p.api_contract()                                                       # value-f
   Resolved ones leave the release; the audit log keeps the history.
 - Inventory for `coverage`: pages/routes, every form and field, every button/link action, every API endpoint.
 - **Fault injection** (error handling is invisible on a healthy backend): an action
-  `{"op": "fault", "fault": {"path": "/api/articles*", "mode": "status|abort|timeout|malformed", "status": 500}}`
+  `{"op": "fault", "fault": {"path": "/api/articles/*", "mode": "status|abort|timeout|malformed", "status": 500}}`
+  (`*` stays within one path segment: that pattern hits an article but not its comments; `**` crosses segments)
   makes matching API calls *as received by the observing browser* fail for the rest of the episode; put it before
   the steps that trigger the call and state rules about what the UI then shows. Cover every important endpoint with
   5xx, network failure and malformed-body probes. The server is never touched.

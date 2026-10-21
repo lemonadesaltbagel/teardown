@@ -107,7 +107,9 @@ novel tool with an independent observer agent: **spec arm 397/397**, hybrid (spe
 - [x] `hang` / `release` faults: calls held pending so loading/disabled states are observable.
 - [x] Conduit round 3 with both: 95/101 (target met). Found: CDN icon fonts blocked during observation (fixed:
   `profile.asset_hosts`), server-clock dates drifting across days (fixed: `mask_dates` + compile-time unknown).
-- [ ] Conduit round 4 with `asset_hosts` + `mask_dates` (expected 99/101; the last 2 need DOM beyond the contract).
+- [x] Conduit round 4 with `asset_hosts` + `mask_dates`: 99/101; conformance 576/576. The last 2 need DOM beyond
+  the public contract.
+- [ ] Held-out web benchmark (an app with its own hidden E2E suite that the web tooling was not tuned on).
 - [ ] CDP coverage for exploration steering; APE-style state-key refinement; HAR freeze for 3-way layering.
 - [ ] TodoMVC benchmark; SaaS limited-reset mode.
 - **Exit:** Conduit clone from a Teardown web spec + the public selectors contract, scored on the hidden E2E
