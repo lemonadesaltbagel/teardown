@@ -9,7 +9,7 @@ from teardown.cli import main
 
 @pytest.mark.parametrize("command", ["observe", "clean", "gate-serve", "remote-verify", "demo", "verify", "verify-web",
                                      "export-clean", "bench-jq", "bench-jsonl", "audit-verify", "review",
-                                     "approve", "release"])
+                                     "approve", "release", "egress-proxy", "cleanroom"])
 def test_every_subcommand_has_help(command, capsys):
     with pytest.raises(SystemExit) as exit_info:
         main([command, "--help"])
@@ -23,7 +23,8 @@ def test_dispatch_covers_every_parser():
 
     source = inspect.getsource(cli.main)
     for command in ["observe", "clean", "gate-serve", "remote-verify", "demo", "verify", "verify-web", "export-clean",
-                    "bench-jq", "bench-jsonl", "audit-verify", "review", "approve", "release"]:
+                    "bench-jq", "bench-jsonl", "audit-verify", "review", "approve", "release",
+                    "egress-proxy", "cleanroom"]:
         assert f'args.command == "{command}"' in source, command
 
 
@@ -45,3 +46,26 @@ def test_review_reports_classes_and_approve_refuses_without_a_terminal(tmp_path,
     code = main(["approve", "--project", str(tmp_path / "p"), "--feature", "signup", "--by", "me",
                  "--class", "expected-output", "--reason", "test-oracle"])  # pytest's stdin is not a terminal
     assert code == 2 and "interactive terminal" in capsys.readouterr().err
+
+
+def test_no_subcommand_argument_shadows_the_command_name():
+    """A subparser argument with dest 'command' silently overwrites the dispatch key (happened twice)."""
+    import teardown.cli as cli
+
+    parser_actions = []
+    original = cli.argparse.ArgumentParser.parse_args
+
+    def spy(self, *a, **k):
+        parser_actions.append(self)
+        return original(self, *a, **k)
+
+    cli.argparse.ArgumentParser.parse_args = spy
+    try:
+        with pytest.raises(SystemExit):
+            main(["--help"])
+    finally:
+        cli.argparse.ArgumentParser.parse_args = original
+    top = parser_actions[0]
+    sub = next(a for a in top._actions if isinstance(a, cli.argparse._SubParsersAction))
+    for name, parser in sub.choices.items():
+        assert all(a.dest != "command" for a in parser._actions), name

@@ -101,3 +101,26 @@ def test_audit_accepts_lists_of_subjects(tmp_path):
     entry = log.append("x", {"claims": ["clm_" + "a" * 64, "clm_" + "b" * 64]}, {})
     assert [s["name"] for s in entry["statement"]["subject"]] == ["claims[0]", "claims[1]"]
     assert log.verify() == 1
+
+
+def test_records_stored_by_an_older_schema_still_load_and_edits_are_still_caught():
+    import json
+
+    import pytest
+
+    from teardown.core.model import TamperedRecord
+    from teardown.gate.gate import GateMode, GateReport, SpecRelease
+
+    rel = SpecRelease(codename="c", mode=GateMode.STANDARD, spec={"x": 1},
+                      report=GateReport(mode=GateMode.STANDARD, findings=[], blocked=False))
+    stored = json.loads(rel.model_dump_json())
+    # simulate an older schema: a field that newer code adds with a default is absent from the stored record
+    old = {k: v for k, v in stored.items() if k != "id"}
+    old["report"] = {k: v for k, v in old["report"].items() if k != "approved_by"}
+    from teardown.core.ids import content_id
+
+    old["id"] = content_id("rel", {k: v for k, v in old.items() if k != "id"})
+    assert SpecRelease.model_validate(old).id == old["id"]
+    old["spec"] = {"x": 2}
+    with pytest.raises((TamperedRecord, ValueError)):
+        SpecRelease.model_validate(old)

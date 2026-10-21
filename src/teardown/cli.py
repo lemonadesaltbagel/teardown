@@ -26,12 +26,15 @@ def main(argv: list[str] | None = None) -> int:
     rv.add_argument("--token", default=None, help="defaults to $TEARDOWN_GATE_TOKEN")
     rv.add_argument("--clone", required=True, help="e.g. cli:build:/kit")
     rv.add_argument("--max-failures", type=int, default=40)
+    rv.add_argument("--adapter", type=Path, help="JSON adapter: {actions, rules} mapping your UI onto the spec")
 
     gate = sub.add_parser("gate-serve", help="serve the verifier/spec/tickets over HTTP for the clean side")
     gate.add_argument("--project", required=True, type=Path)
     gate.add_argument("--host", default="127.0.0.1")
     gate.add_argument("--port", type=int, default=8765)
     gate.add_argument("--token", help="require this bearer token")
+    gate.add_argument("--kit", type=Path, help="the clean-room kit directory: only clones built from it are accepted "
+                      "(web:kit serves <kit>/impl; cli:build:/kit builds it)")
 
     demo = sub.add_parser("demo", help="run the scripted observe -> gate -> clean -> verdict round trip")
     demo.add_argument("--project", type=Path, default=Path(".teardown/demo"))
@@ -94,6 +97,24 @@ def main(argv: list[str] | None = None) -> int:
     apv.add_argument("--kind", default="verbatim", help="finding kind for --class (verbatim, near-verbatim)")
     apv.add_argument("--note", default="")
 
+    eg = sub.add_parser("egress-proxy", help="allowlisting HTTP/CONNECT proxy for the clean zone")
+    eg.add_argument("--allow", action="append", default=[], help="host:port the clean zone may reach (repeatable)")
+    eg.add_argument("--host", default="0.0.0.0")  # noqa: S104 - listens on the clean network only
+    eg.add_argument("--port", type=int, default=3128)
+    eg.add_argument("--log", type=Path)
+
+    cr = sub.add_parser("cleanroom", help="enforced clean room on this machine: up | check | shell | down")
+    cr.add_argument("action", choices=["up", "check", "shell", "down"])
+    cr.add_argument("--project", required=True, type=Path)
+    cr.add_argument("--kit", type=Path, help="(up) the exported kit directory")
+    cr.add_argument("--api", help="(up) backend API the kit names, e.g. http://127.0.0.1:8000/api")
+    cr.add_argument("--allow", action="append", default=[], help="(up) extra host:port for the egress allowlist")
+    cr.add_argument("--port", type=int, default=8765, help="(up) gate port on the host")
+    cr.add_argument("--clone", default="web:kit", help="(up) web:kit or cli:build:/kit")
+    cr.add_argument("--no-model-api", action="store_true", help="(up) do not allow the model API")
+    cr.add_argument("--original-port", type=int, help="(check) the original's port, probed as unreachable")
+    cr.add_argument("shell_cmd", nargs="*", metavar="CMD", help="(shell) command to run instead of bash")
+
     rel = sub.add_parser("release", help="release a feature's current draft through the gate")
     rel.add_argument("--project", required=True, type=Path)
     rel.add_argument("--feature", required=True)
@@ -121,19 +142,19 @@ def main(argv: list[str] | None = None) -> int:
         from teardown.gate.service import serve
         from teardown.project import Project
 
-        server = serve(_local_room(Project(args.project)), args.host, args.port, args.token)
+        server = serve(_local_room(Project(args.project), kit=args.kit), args.host, args.port, args.token)
         print(f"gate service on http://{args.host}:{server.server_address[1]}", flush=True)
         while True:
             time.sleep(3600)
     elif args.command == "remote-verify":
-        import json
         import os
 
         from teardown.gate.service import RemoteCleanRoom
 
         room = RemoteCleanRoom(args.gate_url or os.environ["TEARDOWN_GATE_URL"],
                                args.token or os.environ.get("TEARDOWN_GATE_TOKEN"))
-        verdict = room.verify_against_original(args.clone)
+        adapter = json.loads(args.adapter.read_text(encoding="utf-8")) if args.adapter else None
+        verdict = room.verify_against_original(args.clone, adapter)
         verdict["results"] = [r for r in verdict["results"] if r["status"] != "pass"][: args.max_failures]
         print(json.dumps(verdict, indent=1, ensure_ascii=False))
     elif args.command == "demo":
@@ -145,8 +166,6 @@ def main(argv: list[str] | None = None) -> int:
             shutil.rmtree(args.project)
         run_demo(args.project)
     elif args.command == "verify":
-        import json
-
         from teardown.project import Project
 
         adapter = json.loads(args.adapter.read_text(encoding="utf-8")) if args.adapter else None
@@ -164,8 +183,6 @@ def main(argv: list[str] | None = None) -> int:
 
         print(export_kit(args.project, args.out, args.api))
     elif args.command == "verify-web":
-        import json
-
         from teardown.drivers.web.driver import LocalSite
         from teardown.project import Project
 
@@ -180,8 +197,6 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"passed": verdict.passed, "failed": verdict.failed, "inconclusive": verdict.inconclusive,
                           "not_passing": failing[: args.max_failures]}, indent=1, ensure_ascii=False))
     elif args.command == "bench-jq":
-        import json
-
         from teardown.bench import jqtest
         from teardown.drivers.cli.runner import ContainerRunner
 
@@ -199,7 +214,6 @@ def main(argv: list[str] | None = None) -> int:
                           "rate": round(report.rate, 4), "first_failures": report.failures[:15]}, indent=1))
     elif args.command == "bench-jsonl":
         import collections
-        import json
 
         from teardown.bench import jsonltest
         from teardown.drivers.cli.runner import ContainerRunner
@@ -219,6 +233,34 @@ def main(argv: list[str] | None = None) -> int:
         return _review(args)
     elif args.command == "approve":
         return _approve(args)
+    elif args.command == "egress-proxy":
+        import time
+
+        from teardown.gate.egress import EgressPolicy
+        from teardown.gate.egress import serve as serve_egress
+
+        serve_egress(EgressPolicy(args.allow, args.log), args.host, args.port)
+        print(f"egress proxy on {args.host}:{args.port}; allow: {args.allow}", flush=True)
+        while True:
+            time.sleep(3600)
+    elif args.command == "cleanroom":
+        from teardown import cleanroom_runtime as rt
+
+        if args.action == "up":
+            if not args.kit:
+                print("--kit is required for up", file=sys.stderr)
+                return 2
+            print(json.dumps(rt.up(args.project, args.kit, allow=args.allow, api=args.api, port=args.port,
+                                   clone=args.clone, model_api=not args.no_model_api), indent=1))
+        elif args.action == "check":
+            results = rt.check(args.project, args.original_port)
+            for r in results:
+                print(f"{'ok  ' if r['ok'] else 'FAIL'} {r['probe']}  {r['detail']}")
+            return 0 if results and all(r["ok"] for r in results) else 1
+        elif args.action == "shell":
+            return rt.shell(args.project, args.shell_cmd or None)
+        else:
+            rt.down(args.project)
     elif args.command == "release":
         from teardown.project import Project
 
@@ -313,10 +355,27 @@ def _approve(args) -> int:
     return 0
 
 
-def _local_room(project):
+def _local_room(project, kit: Path | None = None):
+    """The gate's clean-room endpoints. With ``kit``, the clean side can only name clones built from the kit:
+    ``web:kit`` (the kit's ``impl/`` served as a static site) or ``cli:build:/kit`` (the kit's Dockerfile). Any
+    other target spec (a URL, a local command, a Python class) is refused."""
     from teardown.mcp.clean_server import CleanRoom
 
     def verify(clone, adapter=None):
+        if kit is not None:
+            if clone == "web:kit":
+                from teardown.drivers.web.driver import LocalSite
+
+                site = LocalSite(kit / "impl", spa=True)
+                try:
+                    return project.verifier().verify("web:" + site.url(""), adapter=adapter).model_dump(mode="json")
+                finally:
+                    site.close()
+            if clone in ("cli:build:/kit", "cli:build:kit"):
+                clone = f"cli:build:{kit.resolve()}"
+            else:
+                raise PermissionError(f"this gate accepts only clones built from the kit (web:kit, cli:build:/kit), "
+                                      f"not {clone!r}")
         return project.verifier().verify(clone, adapter=adapter).model_dump(mode="json")
 
     return CleanRoom(project.releases_dir, project.tickets_dir, verify)

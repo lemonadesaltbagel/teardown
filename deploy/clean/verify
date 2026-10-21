@@ -1,0 +1,3 @@
+#!/bin/sh
+# Verify the clone in /kit against the original through the gate (the only verification path in the clean room).
+exec teardown remote-verify --clone "${TEARDOWN_CLONE:-web:kit}" "$@"

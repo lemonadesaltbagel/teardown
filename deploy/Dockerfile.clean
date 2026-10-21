@@ -1,0 +1,19 @@
+# Clean-room workspace for an implementer agent (Claude Code), built for the cleanroom compose file.
+# The container sees only the kit; its only network peer is the egress proxy.
+FROM node:22-slim AS node
+FROM python:3.12-slim
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+ && npm install -g --no-fund --no-audit @anthropic-ai/claude-code \
+ && npm cache clean --force
+COPY pyproject.toml README.md /opt/teardown/
+COPY src /opt/teardown/src
+RUN pip install --no-cache-dir /opt/teardown
+# Managed settings apply to every Claude Code session in the container and cannot be overridden by the agent.
+COPY deploy/clean/managed-settings.json /etc/claude-code/managed-settings.json
+COPY deploy/clean/verify /usr/local/bin/verify
+RUN chmod 755 /usr/local/bin/verify && useradd -m -u 1000 clean
+USER clean
+WORKDIR /kit

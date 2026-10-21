@@ -1,0 +1,47 @@
+# Enforced clean room on one machine (started by `teardown cleanroom up`).
+#
+# - The gate runs on the host (the dirty zone) and accepts only clones built from the kit.
+# - clean: the implementer's container. It sees only the kit and the `cleanroom` network, which is internal (no
+#   route to the internet, the host, or the original). Its only peer is egress.
+# - egress: the allowlisting proxy, the only service on both networks. It forwards only to EGRESS_ALLOW
+#   (model API, the gate, and an API the kit may call) and logs every attempt.
+name: teardown-cleanroom
+services:
+  egress:
+    build: {context: .., dockerfile: deploy/Dockerfile}
+    command: ["sh", "-c", "exec teardown egress-proxy --port 3128 --log /log/egress.jsonl $$(for a in $$EGRESS_ALLOW; do printf -- '--allow %s ' $$a; done)"]
+    environment:
+      EGRESS_ALLOW: ${EGRESS_ALLOW:?set EGRESS_ALLOW}
+    volumes:
+      - ${CLEANROOM_LOG:?set CLEANROOM_LOG}:/log
+    networks: [cleanroom, outside]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+  clean:
+    build: {context: .., dockerfile: deploy/Dockerfile.clean}
+    command: ["sleep", "infinity"]
+    working_dir: /kit
+    environment:
+      HTTP_PROXY: http://egress:3128
+      HTTPS_PROXY: http://egress:3128
+      http_proxy: http://egress:3128
+      https_proxy: http://egress:3128
+      NO_PROXY: ""
+      TEARDOWN_GATE_URL: ${GATE_URL:?set GATE_URL}
+      TEARDOWN_GATE_TOKEN: ${GATE_TOKEN:?set GATE_TOKEN}
+      TEARDOWN_CLONE: ${CLONE:-web:kit}
+      TEARDOWN_API_URL: ${KIT_API_URL:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      HOME: /home/clean
+    volumes:
+      - ${KIT:?set KIT}:/kit
+    networks: [cleanroom]
+    read_only: true
+    tmpfs: [/tmp, "/home/clean:uid=1000,gid=1000"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+networks:
+  cleanroom: {internal: true}
+  outside: {}

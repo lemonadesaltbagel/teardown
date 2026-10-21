@@ -21,6 +21,13 @@ class TamperedRecord(ValueError):
     pass
 
 
+def _stored_id(prefix: str, stored: dict[str, Any]) -> str | None:
+    try:
+        return content_id(prefix, stored)
+    except (TypeError, ValueError):  # not JSON-native: constructed in Python, not loaded from storage
+        return None
+
+
 class ContentAddressed(BaseModel):
     """An immutable record whose ``id`` is the hash of its other fields."""
 
@@ -32,14 +39,20 @@ class ContentAddressed(BaseModel):
     def semantic_projection(self) -> dict[str, Any]:
         return self.model_dump(mode="json", exclude={"id"})
 
-    @model_validator(mode="after")
-    def _assign_or_verify_id(self) -> ContentAddressed:
-        expected = content_id(self.PREFIX, self.semantic_projection())
-        if not self.id:
-            object.__setattr__(self, "id", expected)
-        elif self.id != expected:
-            raise TamperedRecord(f"{self.PREFIX} record id {self.id} does not match its content ({expected})")
-        return self
+    @model_validator(mode="wrap")
+    @classmethod
+    def _assign_or_verify_id(cls, data: Any, handler) -> ContentAddressed:
+        obj = handler(data)
+        expected = content_id(obj.PREFIX, obj.semantic_projection())
+        if not obj.id:
+            object.__setattr__(obj, "id", expected)
+        elif obj.id != expected:
+            # A record stored by an older schema lacks fields added since (with defaults): the id is checked
+            # against the content as stored, so old records stay valid and any edit to them is still caught.
+            stored = {k: v for k, v in data.items() if k != "id"} if isinstance(data, dict) else None
+            if stored is None or obj.id != _stored_id(obj.PREFIX, stored):
+                raise TamperedRecord(f"{obj.PREFIX} record id {obj.id} does not match its content ({expected})")
+        return obj
 
 
 class ObservationTier(StrEnum):

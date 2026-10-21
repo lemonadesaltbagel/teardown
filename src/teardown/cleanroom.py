@@ -35,7 +35,8 @@ directory. Ask questions by writing them to `questions.md`.
   standard library only, code in `impl/`, entry point `impl/main.py`).
 - `./verify.sh` builds the image and runs the conformance suite against your build and the original. It reports
   pass/fail counts and, for failing tests, the inputs plus expected and observed abstract symbols. Each call uses
-  verification budget; batch your fixes.
+  verification budget; batch your fixes. Inside an enforced clean room (`teardown cleanroom`) the command is
+  `verify` instead (same options): it asks the gate, which builds and runs your kit.
 """
 
 DOCKERFILE = """FROM python:3.12-slim
@@ -74,6 +75,9 @@ the network beyond the backend API named below; do not read anything outside thi
 - `./verify.sh` serves `impl/` and runs the conformance suite against your build and the original, reporting
   pass/fail per test with abstract symbols. If your accessible names differ from the spec's, pass an adapter:
   `./verify.sh --adapter adapter.json` with `{{"actions": {{name: action}}, "rules": [mapper rules]}}`.
+- Inside an enforced clean room (`teardown cleanroom`) the command is `verify` instead (same options): it asks the
+  gate, which serves your `impl/`. From the clean shell the backend is reachable at `$TEARDOWN_API_URL`; your app
+  itself must still call the address above, because the gate runs it.
 """
 
 WEB_VERIFY = """#!/bin/sh
