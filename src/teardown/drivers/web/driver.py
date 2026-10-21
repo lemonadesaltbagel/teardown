@@ -86,6 +86,8 @@ _CONTRACT_PROBE = """(sels) => Object.fromEntries(sels.map(sel => {
 }))"""
 
 _LOCAL = threading.local()
+_ASSETS: dict[str, tuple[int, dict[str, str], bytes]] = {}  # url -> (status, headers, body), per process
+_ASSET_TYPES = {"stylesheet", "font", "image"}
 
 
 def _browser():
@@ -112,6 +114,10 @@ class Profile(BaseModel):
     post_action_grace_ms: int = 40
     block_external: bool = True
     allow_hosts: list[str] = []
+    asset_hosts: list[str] = Field(
+        default_factory=list, description="Third-party hosts whose stylesheets, fonts and images are fetched once per "
+        "process and replayed from memory (icon fonts, CSS frameworks): layout matches a real deployment, runs stay "
+        "deterministic. Scripts and API calls to them stay blocked.")
     settle_timeout_ms: int = 3000
 
 
@@ -225,11 +231,20 @@ class WebDriver(Driver):
             allowed = {urlparse(self.url).hostname, "127.0.0.1", "localhost", *p.allow_hosts}
             self._allowed = allowed
 
+            assets = set(p.asset_hosts)
+
             def gate(route):
-                host = urlparse(route.request.url).hostname
+                req = route.request
+                host = urlparse(req.url).hostname
                 try:
-                    if host in allowed or route.request.url.startswith(("data:", "blob:")):
+                    if host in allowed or req.url.startswith(("data:", "blob:")):
                         route.continue_()
+                    elif host in assets and req.resource_type in _ASSET_TYPES and req.method == "GET":
+                        if req.url not in _ASSETS:
+                            fetched = route.fetch()
+                            _ASSETS[req.url] = (fetched.status, fetched.headers, fetched.body())
+                        status, headers, body = _ASSETS[req.url]
+                        route.fulfill(status=status, headers=headers, body=body)
                     else:
                         route.abort()
                 except Exception:  # noqa: BLE001 - page/context closed meanwhile: the request is gone anyway

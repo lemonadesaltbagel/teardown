@@ -116,5 +116,10 @@ p.api_contract()                                                       # value-f
   observation then carries `contract`: per selector `absent | hidden | empty | content`. This sees structure the
   accessibility view omits (elements with no accessible content). Use only selectors the public document names;
   state rules on the `contract` key.
+- **Third-party assets**: hosts other than the target's are blocked (determinism, and no outside service learns what
+  is observed). If the app's layout depends on a CDN stylesheet or icon font, observations differ from a real
+  deployment (icons with zero size, for instance). Name those hosts in
+  `target_options={"profile": {"asset_hosts": ["<cdn host>"]}}`: their stylesheets, fonts and images are fetched
+  once per process and replayed; scripts and API calls to them stay blocked.
 - Route and network symbols include query strings (`/?feed=following`, `GET /api/articles?limit=10&offset=0`):
   state rules about pagination and filters through them.

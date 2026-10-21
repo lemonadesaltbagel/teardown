@@ -108,9 +108,10 @@ def open_driver(target_spec: str, actions: dict[str, dict[str, Any]] | None = No
         table = {k: Invocation.model_validate(v) for k, v in (actions or {}).items()}
         return CliDriver(target_spec, actions=table)
     if target_spec.startswith("web:"):
-        from teardown.drivers.web.driver import WebAction, WebDriver
+        from teardown.drivers.web.driver import Profile, WebAction, WebDriver
 
         return WebDriver(target_spec, actions={k: WebAction.model_validate(v) for k, v in (actions or {}).items()},
+                         profile=Profile(**options["profile"]) if options.get("profile") else None,
                          reset_command=options.get("reset_command"), reset_check_url=options.get("reset_check_url"),
                          contract_selectors=options.get("contract_selectors"))
     if target_spec.startswith("desktop:"):
@@ -153,7 +154,8 @@ class ProjectState(BaseModel):
     coverage: dict[str, dict[str, Any]] = Field(default_factory=dict, description="feature -> last coverage report")
     target_options: dict[str, Any] = Field(default_factory=dict,
                                            description="driver options, e.g. reset_command, reset_check_url, "
-                                                       "contract_selectors")
+                                                       "contract_selectors, profile (web determinism profile "
+                                                       "overrides such as asset_hosts)")
 
 
 class Project:

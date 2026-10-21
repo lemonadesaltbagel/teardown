@@ -203,3 +203,10 @@ def test_contract_rules_release_and_catch_a_clone_that_drops_the_empty_wrapper(t
         assert verifier.verify("web:" + site.url("clone.html"), repeats=1).failed == 1
     finally:
         site.close()
+
+
+def test_profile_overrides_reach_the_driver():
+    from teardown.project import open_driver
+
+    d = open_driver("web:http://127.0.0.1:9/", None, {"profile": {"asset_hosts": ["cdn.example"]}})
+    assert d.profile.asset_hosts == ["cdn.example"] and d.profile.block_external
