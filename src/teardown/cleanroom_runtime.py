@@ -60,7 +60,8 @@ def _wait_gate(url: str, token: str, timeout_s: float = 30) -> None:
 
 
 def up(project: Path, kit: Path, *, allow: list[str] | None = None, api: str | None = None, port: int = 8765,
-       clone: str = "web:kit", model_api: bool = True, build: bool = True) -> dict[str, Any]:
+       clone: str = "web:kit", model_api: bool = True, build: bool = True,
+       claude_token_file: Path | None = None) -> dict[str, Any]:
     project, kit = project.resolve(), kit.resolve()
     if not (kit / "spec.json").exists():
         raise FileNotFoundError(f"{kit} is not a clean-room kit (no spec.json); run teardown export-clean first")
@@ -82,10 +83,13 @@ def up(project: Path, kit: Path, *, allow: list[str] | None = None, api: str | N
         kit_api = api.replace(f"//{u.hostname}", f"//{host}", 1)
     env = {"KIT": str(kit), "GATE_URL": f"http://{HOST_ALIAS}:{port}", "GATE_TOKEN": token, "CLONE": clone,
            "EGRESS_ALLOW": " ".join(egress), "CLEANROOM_LOG": str(state_dir), "KIT_API_URL": kit_api}
+    secrets_env = {}
+    if claude_token_file:  # credentials go to the container's environment only, never into the kit or state.json
+        secrets_env["CLAUDE_CODE_OAUTH_TOKEN"] = Path(claude_token_file).expanduser().read_text().strip()
     state = {"gate_pid": gate.pid, "port": port, "token": token, "kit": str(kit), "env": env, "started": time.time()}
     (state_dir / "state.json").write_text(json.dumps(state, indent=1))
     try:
-        _compose(env, "up", "-d", *(["--build"] if build else []))
+        _compose({**env, **secrets_env}, "up", "-d", *(["--build"] if build else []))
     except subprocess.CalledProcessError:
         down(project)
         raise

@@ -112,6 +112,8 @@ def main(argv: list[str] | None = None) -> int:
     cr.add_argument("--port", type=int, default=8765, help="(up) gate port on the host")
     cr.add_argument("--clone", default="web:kit", help="(up) web:kit or cli:build:/kit")
     cr.add_argument("--no-model-api", action="store_true", help="(up) do not allow the model API")
+    cr.add_argument("--claude-token-file", type=Path,
+                    help="(up) file holding a Claude Code OAuth token (`claude setup-token`) for the clean agent")
     cr.add_argument("--original-port", type=int, help="(check) the original's port, probed as unreachable")
     cr.add_argument("shell_cmd", nargs="*", metavar="CMD", help="(shell) command to run instead of bash")
 
@@ -251,7 +253,8 @@ def main(argv: list[str] | None = None) -> int:
                 print("--kit is required for up", file=sys.stderr)
                 return 2
             print(json.dumps(rt.up(args.project, args.kit, allow=args.allow, api=args.api, port=args.port,
-                                   clone=args.clone, model_api=not args.no_model_api), indent=1))
+                                   clone=args.clone, model_api=not args.no_model_api,
+                                   claude_token_file=args.claude_token_file), indent=1))
         elif args.action == "check":
             results = rt.check(args.project, args.original_port)
             for r in results:
