@@ -12,8 +12,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="teardown", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    observe = sub.add_parser("observe", help="run the dirty-side observe MCP server on stdio")
+    observe = sub.add_parser("observe", help="run the dirty-side observe MCP server (stdio, or HTTP with --port)")
     observe.add_argument("--project", required=True, type=Path)
+    observe.add_argument("--port", type=int, help="serve streamable HTTP on this port instead of stdio")
+    observe.add_argument("--host", default="127.0.0.1")
+    observe.add_argument("--token", help="(HTTP) required bearer token")
+    observe.add_argument("--allowed-host", action="append", default=["127.0.0.1", "localhost"],
+                         help="(HTTP) Host header values accepted (DNS-rebinding protection)")
 
     clean = sub.add_parser("clean", help="run the clean-side MCP server on stdio")
     where = clean.add_mutually_exclusive_group(required=True)
@@ -117,6 +122,17 @@ def main(argv: list[str] | None = None) -> int:
     cr.add_argument("--original-port", type=int, help="(check) the original's port, probed as unreachable")
     cr.add_argument("shell_cmd", nargs="*", metavar="CMD", help="(shell) command to run instead of bash")
 
+    orr = sub.add_parser("observerroom", help="enforced observer room on this machine: up | check | shell | down")
+    orr.add_argument("action", choices=["up", "check", "shell", "down"])
+    orr.add_argument("--project", required=True, type=Path)
+    orr.add_argument("--workspace", type=Path, help="(up) the observer's scratch directory (mounted at /work)")
+    orr.add_argument("--port", type=int, default=8766, help="(up) observe server port on the host")
+    orr.add_argument("--no-model-api", action="store_true")
+    orr.add_argument("--claude-token-file", type=Path)
+    orr.add_argument("--target-port", type=int, action="append", default=[],
+                     help="(check) host ports of the target, probed as unreachable")
+    orr.add_argument("shell_cmd", nargs="*", metavar="CMD", help="(shell) command to run instead of bash")
+
     rel = sub.add_parser("release", help="release a feature's current draft through the gate")
     rel.add_argument("--project", required=True, type=Path)
     rel.add_argument("--feature", required=True)
@@ -127,7 +143,16 @@ def main(argv: list[str] | None = None) -> int:
         from teardown.mcp.observe_server import build_observe_server
         from teardown.project import Project
 
-        build_observe_server(Project(args.project)).run()
+        server = build_observe_server(Project(args.project))
+        if args.port is None:
+            server.run()
+        else:
+            if not args.token:
+                print("--token is required for HTTP", file=sys.stderr)
+                return 2
+            from teardown.mcp.http import serve_http
+
+            serve_http(server, host=args.host, port=args.port, token=args.token, allowed_hosts=args.allowed_host)
     elif args.command == "clean":
         from teardown.mcp.clean_server import build_clean_server
         from teardown.project import Project
@@ -264,6 +289,25 @@ def main(argv: list[str] | None = None) -> int:
             return rt.shell(args.project, args.shell_cmd or None)
         else:
             rt.down(args.project)
+    elif args.command == "observerroom":
+        from teardown import cleanroom_runtime as rt
+
+        if args.action == "up":
+            if not args.workspace:
+                print("--workspace is required for up", file=sys.stderr)
+                return 2
+            print(json.dumps(rt.observer_up(args.project, args.workspace, port=args.port,
+                                            model_api=not args.no_model_api,
+                                            claude_token_file=args.claude_token_file), indent=1))
+        elif args.action == "check":
+            results = rt.check(args.project, room="observer", target_ports=args.target_port)
+            for r in results:
+                print(f"{'ok  ' if r['ok'] else 'FAIL'} {r['probe']}  {r['detail']}")
+            return 0 if results and all(r["ok"] for r in results) else 1
+        elif args.action == "shell":
+            return rt.shell(args.project, args.shell_cmd or None, room="observer")
+        else:
+            rt.down(args.project, room="observer")
     elif args.command == "release":
         from teardown.project import Project
 

@@ -1,5 +1,5 @@
-# Clean-room workspace for an implementer agent (Claude Code), built for the cleanroom compose file.
-# The container sees only the kit; its only network peer is the egress proxy.
+# Agent workspace for the enforced rooms (Claude Code + Teardown): the implementer in the clean room, the observer
+# in the observer room. The container sees one directory; its only network peer is the egress proxy.
 FROM node:22-slim AS node
 FROM python:3.12-slim
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir /opt/teardown
 # Managed settings apply to every Claude Code session in the container and cannot be overridden by the agent.
 COPY deploy/clean/managed-settings.json /etc/claude-code/managed-settings.json
 COPY deploy/clean/verify /usr/local/bin/verify
-RUN chmod 755 /usr/local/bin/verify && useradd -m -u 1000 clean
+COPY deploy/clean/room-claude /usr/local/bin/room-claude
+RUN chmod 755 /usr/local/bin/verify /usr/local/bin/room-claude && useradd -m -u 1000 clean
 USER clean
 WORKDIR /kit

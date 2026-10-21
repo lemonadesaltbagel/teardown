@@ -63,3 +63,26 @@ It exits non-zero if any probe fails.
 - The model API is reachable by design. What the agent sends there is governed by your model provider's terms,
   not by Teardown.
 - A web clone runs in the gate's browser on the host, with the same third-party blocking as the original.
+
+## The observer room
+
+The same pattern confines the dirty side's *agent*: it can observe the target only through Teardown's drivers.
+
+```bash
+teardown observerroom up    --project P --workspace W --claude-token-file ~/.config/teardown-claude-token
+teardown observerroom check --project P --target-port 4300 --target-port 8000
+teardown observerroom shell --project P -- room-claude      # Claude Code with only the observe MCP server
+teardown observerroom down  --project P
+```
+
+- The observe MCP server runs on the host over HTTP (`teardown observe --port`, bearer token, Host-header check).
+  The drivers keep their privileges there (Docker, browser, adb).
+- The observer container mounts only its scratch workspace at `/work`. Put public documents there (the guide, a
+  manual, a public markup contract).
+- Egress allows the observe server and the model API, never the target. The agent cannot fetch bundles, read the
+  target's files or source, or reach the internet. What it learns comes through behavior-tier observations.
+- `check` probes for the target's ports, the internet, the project directory and the Teardown repository (which
+  may hold reference sources).
+
+This makes "behavior-first" a property of the environment, not of the prompt. One gap remains that no room can
+close: what the observer's model already remembers about a famous target.
