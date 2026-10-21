@@ -141,7 +141,8 @@ def check(project: Path, original_port: int | None = None) -> list[dict[str, Any
 
 def shell(project: Path, command: list[str] | None = None) -> int:
     state = _load(project.resolve())
-    return _compose(state["env"], "exec", "clean", *(command or ["bash"]), check=False).returncode
+    tty = [] if sys.stdin.isatty() else ["-T"]  # no TTY when driven by a script or an agent
+    return _compose(state["env"], "exec", *tty, "clean", *(command or ["bash"]), check=False).returncode
 
 
 def down(project: Path) -> None:

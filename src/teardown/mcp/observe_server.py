@@ -27,7 +27,11 @@ UNTRUSTED = {"untrusted_content": True, "source": "analysis_target"}
 def build_observe_server(project: Project) -> MCPServer:
     server = MCPServer(name="teardown-observe", instructions=INSTRUCTIONS)
 
-    @server.tool(description="Open a target and record intake (declared purpose, jurisdiction, ToS snapshot).")
+    @server.tool(description="Open a target and record intake (declared purpose, jurisdiction, ToS snapshot). "
+                 "target: cli:docker:<image> | cli:build:<dir> | cli:local | web:<url> | android:<serial>:<package> | "
+                 "desktop:docker:<image>. strict: every release needs a person's approval at a terminal. "
+                 "target_options (web): reset_command, reset_check_url, contract_selectors {source, selectors}, "
+                 "api_templates, profile {asset_hosts, ...}; see the observer guide.")
     def open_target(
         target: str,
         purpose: str,
@@ -38,6 +42,7 @@ def build_observe_server(project: Project) -> MCPServer:
         max_actions_per_second: float | None = None,
         strict: bool = False,
         real_names: list[str] | None = None,
+        target_options: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         intake, notes = project.open_target(
             target,
@@ -49,15 +54,17 @@ def build_observe_server(project: Project) -> MCPServer:
             max_actions_per_second=max_actions_per_second,
             strict=strict,
             real_names=real_names,
+            target_options=target_options,
         )
         state = project.state
         return {"intake": intake.id, "target": state.target, "codename": state.gate.codename, "warnings": notes,
                 "actions": project.session().driver.actions()}
 
     @server.tool(description="Replace the mapper rules (drop/mask/rename/classify). Creates a new mapper version.")
-    def set_mapper(rules: list[dict[str, Any]], note: str = "") -> dict[str, Any]:
-        version = project.set_mapper(rules, note)
-        return {"mapper": version.id, "parent": version.parent}
+    def set_mapper(rules: list[dict[str, Any]] | None = None, note: str = "",
+                   params: dict[str, Any] | None = None) -> dict[str, Any]:
+        version = project.set_mapper(rules, note, params=params)
+        return {"mapper": version.id, "parent": version.parent, "params": version.params}
 
     @server.tool(description="Reset the target, apply the inputs, and return raw observations and symbols.")
     def run_sequence(inputs: list[str]) -> dict[str, Any]:
@@ -89,7 +96,8 @@ def build_observe_server(project: Project) -> MCPServer:
     def probe_cli(feature: str, hints: dict[str, Any], pairwise: bool = True, env_sample: int = 200) -> dict[str, Any]:
         return project.probe_cli(feature, hints, pairwise=pairwise, env_sample=env_sample)
 
-    @server.tool(description="Probe one web form field: equivalence classes for its kind (text/email/password/"
+    @server.tool(description="Probe one form field (web, Android or desktop UI): equivalence classes for its kind "
+                 "(text/email/password/"
                  "number or custom `classes`), a length-boundary search, per-class outcomes and folded claims. "
                  "`prefix` = named actions that reach the form; `submit` = the named action that submits it. "
                  "Boundary classes become named actions you can add to learn_flow's alphabet.")
@@ -152,6 +160,21 @@ def build_observe_server(project: Project) -> MCPServer:
     @server.tool(description="Record something that could not be observed (missing coverage is unknown, not absence).")
     def record_unknown(feature: str, question: str, recommended_probes: list[str] | None = None) -> dict[str, Any]:
         return project.ledger.record_unknown(feature, question, recommended_probes).model_dump(mode="json")
+
+    @server.tool(description="Mark an unknown resolved / out-of-scope / investigating (or reopen it) with a note. "
+                 "Resolved unknowns leave the release; the audit log keeps the history.")
+    def update_unknown(unknown_id: str, status: str, note: str = "") -> dict[str, Any]:
+        return project.update_unknown(unknown_id, status, note)
+
+    @server.tool(description="Web: third-party hosts the app tried to load during one episode (reset + actions); "
+                 "candidates for target_options.profile.asset_hosts when layout depends on them.")
+    def blocked_hosts(actions: list[str] | None = None) -> list[dict[str, str]]:
+        return project.blocked_hosts(actions)
+
+    @server.tool(description="Web: the value-free backend contract observed so far (paths, methods, statuses, body "
+                 "shapes). Fold data-bearing path segments with target_options.api_templates.")
+    def api_contract() -> dict[str, Any]:
+        return project.api_contract()
 
     @server.tool(description="Compile a spec draft (model + claims + unknowns) for a feature.")
     def compile_spec(feature: str) -> dict[str, Any]:
