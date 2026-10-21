@@ -139,6 +139,23 @@ def default_mapper(target_spec: str, target: str) -> MapperVersion:
     return MapperVersion(target=target, note="identity mapper (no rules yet)")
 
 
+
+def _contract_path(path: str, templates: list[str]) -> str:
+    """Observed API path -> contract path: the first matching template ('{name}' matches one segment), query
+    values dropped (keys kept)."""
+    base, _, query = path.partition("?")
+    segments = base.strip("/").split("/")
+    for template in templates:
+        parts = template.strip("/").split("/")
+        if len(parts) == len(segments) and all(p == s or (p.startswith("{") and p.endswith("}"))
+                                               for p, s in zip(parts, segments, strict=True)):
+            base = "/" + "/".join(parts)
+            break
+    if query:
+        keys = sorted({kv.partition("=")[0] for kv in query.split("&") if kv})
+        base += "?" + "&".join(f"{k}={{}}" for k in keys)
+    return base
+
 class ProjectState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -227,13 +244,18 @@ class Project:
         driver.close()
         return intake, notes
 
-    def set_mapper(self, rules: list[MapperRule | dict[str, Any]], note: str = "") -> MapperVersion:
+    def set_mapper(self, rules: list[MapperRule | dict[str, Any]] | None = None, note: str = "", *,
+                   params: dict[str, Any] | None = None) -> MapperVersion:
+        """New mapper version: ``rules`` replace the current rules (None keeps them); ``params`` are merged into the
+        built-in abstraction's parameters (e.g. ``{"mask_dates": True}`` for web.aria/v1)."""
         state = self.state
         current = self.workspace.get(state.mapper, MapperVersion)
+        if rules is None:
+            rules = list(current.rules)
         version = MapperVersion(
             target=state.target,
             builtin=current.builtin,
-            params=current.params,
+            params={**(current.params or {}), **(params or {})},
             rules=[r if isinstance(r, MapperRule) else MapperRule.model_validate(r) for r in rules],
             parent=state.mapper,
             note=note,
@@ -333,6 +355,22 @@ class Project:
     def falsify_claim(self, claim_id: str, repeats: int = 3):
         return self.ledger.falsify(claim_id, self.session(), repeats=repeats)
 
+    def update_unknown(self, unknown_id: str, status: str, note: str = "") -> dict[str, Any]:
+        """Mark an unknown investigating / resolved / out-of-scope (or reopen it), with a note saying why. Resolved
+        unknowns stay in the ledger and the audit log but are no longer released; out-of-scope ones are released
+        (the implementer should know what was not observed)."""
+        from teardown.core.model import UnknownStatus
+
+        unknowns = self.workspace.load_unknowns()
+        if unknown_id not in unknowns:
+            raise KeyError(unknown_id)
+        unknown = unknowns[unknown_id]
+        unknown.status = UnknownStatus(status)
+        unknown.note = note
+        self.workspace.save_unknowns(unknowns)
+        self.audit.append("unknown-updated", {"unknown": unknown_id}, {"status": unknown.status.value, "note": note})
+        return unknown.model_dump(mode="json")
+
     def blocked_hosts(self, actions: list[str] | None = None) -> list[dict[str, str]]:
         """Third-party hosts the web determinism profile refused during one episode (reset + ``actions``): which
         stylesheets, fonts or scripts the app tried to load. Candidates for ``profile.asset_hosts`` when layout
@@ -357,7 +395,12 @@ class Project:
         if not self.state.target_spec.startswith("web:"):
             return
         version = self.workspace.get(self.state.mapper, MapperVersion)
-        if version.builtin != "web.aria/v1" or (version.params or {}).get("mask_dates"):
+        if version.builtin != "web.aria/v1":
+            return
+        if (version.params or {}).get("mask_dates"):  # masked now: an earlier clock unknown is answered
+            for u in self.ledger.unknowns().values():
+                if u.identity.feature == feature and u.status == "open" and "calendar dates" in u.identity.question:
+                    self.update_unknown(u.id, "resolved", "dates are masked (web.aria/v1 mask_dates)")
             return
         from teardown.engine.abstractions import CALENDAR_DATE
 
@@ -368,7 +411,7 @@ class Project:
                 feature, f"Expected UI text contains calendar dates ({', '.join(dates[:3])}): if they come from a "
                          "clock (e.g. creation times) they drift and verification turns inconclusive; mask them "
                          "(web.aria/v1 param mask_dates) or confirm they are fixed data.",
-                ["re-run a date-bearing check on another day", "set_mapper('web.aria/v1', {'mask_dates': true})"])
+                ["re-run a date-bearing check on another day", "set_mapper(params={'mask_dates': True})"])
 
     def compile_spec(self, feature: str) -> SpecDraft:
         state = self.state
@@ -385,7 +428,8 @@ class Project:
         version = self.workspace.get(state.mapper, MapperVersion)
         abstraction = {"builtin": version.builtin, "params": version.params} if version.builtin else {}
         claims = [c for c in self.ledger.all().values() if c.identity.feature == feature]
-        unknowns = [u for u in self.ledger.unknowns().values() if u.identity.feature == feature]
+        unknowns = [u for u in self.ledger.unknowns().values()
+                    if u.identity.feature == feature and u.status != "resolved"]
         draft = SpecDraft(
             feature=feature,
             target=state.target,
@@ -567,16 +611,20 @@ class Project:
 
     def api_contract(self) -> dict[str, Any]:
         """OpenAPI-style skeleton of the backend contract observed through the UI: paths, methods, statuses and
-        value-free body shapes. No values, so no data or prose from the target."""
+        value-free body shapes. No values, so no data or prose from the target: query values become ``{}``, and
+        path segments that are data (slugs, user names) are folded by the observer's ``target_options
+        ["api_templates"]`` (e.g. ``["/api/articles/feed", "/api/articles/{slug}"]``; first match wins)."""
         from teardown.core.model import Evidence
 
+        templates = list(self.state.target_options.get("api_templates", []))
         paths: dict[str, dict[str, Any]] = {}
         for ev in self.workspace.iter_objects("ev", Evidence):
             if ev.driver != "web" or not isinstance(ev.payload, dict):
                 continue
             for ex in ev.payload.get("api_shapes", []) + [
                     {"method": m, "path": p, "status": st} for m, p, st in ev.payload.get("network", [])]:
-                op = paths.setdefault(ex["path"], {}).setdefault(ex["method"].lower(), {"responses": {}})
+                op = paths.setdefault(_contract_path(ex["path"], templates), {}).setdefault(
+                    ex["method"].lower(), {"responses": {}})
                 if ex.get("request_shape") is not None:
                     op["requestBody"] = ex["request_shape"]
                 if ex.get("status") is not None:

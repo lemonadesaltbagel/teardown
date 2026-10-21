@@ -97,8 +97,16 @@ def export_web_kit(project_root: Path, out: Path, rel, api: str) -> str:
     out.mkdir(parents=True, exist_ok=True)
     (out / "impl").mkdir(exist_ok=True)
     (out / "spec.json").write_text(json.dumps(rel.spec, indent=1, ensure_ascii=False), encoding="utf-8")
-    (out / "README.md").write_text(WEB_README.format(codename=rel.codename, release=rel.id, api=api,
-                                                     contract=rel.spec["testability_contract"]), encoding="utf-8")
+    readme = WEB_README.format(codename=rel.codename, release=rel.id, api=api,
+                               contract=rel.spec["testability_contract"])
+    from teardown.project import Project
+
+    hosts = (Project(project_root).state.target_options.get("profile") or {}).get("asset_hosts") or []
+    if hosts:  # layout-dependent observations (sizes, visibility) reflect these third-party assets
+        readme += ("\n- The original was observed with stylesheets, fonts and images from these third-party hosts "
+                   f"loaded: {', '.join(sorted(hosts))}. Sizes, visibility and accessible names (icon glyphs) "
+                   "reflect them. Your build may not load them: reproduce their effect with your own assets.\n")
+    (out / "README.md").write_text(readme, encoding="utf-8")
     verify = out / "verify.sh"
     verify.write_text(WEB_VERIFY.format(repo=_shlex.quote(str(repo)), project=_shlex.quote(str(link))),
                       encoding="utf-8")

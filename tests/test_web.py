@@ -228,6 +228,10 @@ def test_clock_dates_are_flagged_as_unknown_until_masked(tmp_path):
         project.check_rules("post", rules, workers=1)
         draft = project.compile_spec("post")
         assert any("calendar dates" in u.identity.question for u in draft.unknowns)
+        project.set_mapper(params={"mask_dates": True})  # rules are kept, dates become <date>
+        project.check_rules("post", [{**rules[0], "checks": [{**rules[0]["checks"][0],
+                                                              "expect": {"text": ["Published <date>"]}}]}], workers=1)
+        assert not any("calendar dates" in u.identity.question for u in project.compile_spec("post").unknowns)
         assert web_aria({"aria": '- paragraph: Published October 20, 2026', "path": "/"},
                         {"mask_dates": True})["text"] == ["Published <date>"]
     finally:
@@ -247,3 +251,13 @@ def test_blocked_hosts_are_reported(tmp_path):
         assert project.blocked_hosts() == [{"host": "cdn.invalid", "type": "stylesheet"}]
     finally:
         site.close()
+
+
+def test_api_contract_folds_declared_templates_and_query_values():
+    from teardown.project import _contract_path
+
+    templates = ["/api/articles/feed", "/api/articles/{slug}", "/api/articles/{slug}/comments"]
+    assert _contract_path("/api/articles/my-post-1a2b3c4d", templates) == "/api/articles/{slug}"
+    assert _contract_path("/api/articles/feed?limit=10&offset=0", templates) == "/api/articles/feed?limit={}&offset={}"
+    assert _contract_path("/api/articles/x/comments", templates) == "/api/articles/{slug}/comments"
+    assert _contract_path("/api/tags", templates) == "/api/tags"

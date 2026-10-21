@@ -34,12 +34,19 @@ class AuditLog:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.signer = signer
 
-    def append(self, predicate: str, subjects: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
-        """``subjects`` maps a name to its sha256 hex digest (ids are converted by stripping their prefix)."""
+    def append(self, predicate: str, subjects: dict[str, str | list[str]], body: dict[str, Any]) -> dict[str, Any]:
+        """``subjects`` maps a name to its sha256 hex digest (ids are converted by stripping their prefix), or to a
+        list of them (recorded as ``name[0]``, ``name[1]``, ...)."""
         seq, prev = self._tail()
+        flat: list[tuple[str, str]] = []
+        for name, digest in sorted(subjects.items()):
+            if isinstance(digest, list | tuple):
+                flat.extend((f"{name}[{i}]", d) for i, d in enumerate(digest))
+            else:
+                flat.append((name, digest))
         statement = {
             "_type": STATEMENT_TYPE,
-            "subject": [{"name": n, "digest": {"sha256": _hex(d)}} for n, d in sorted(subjects.items())],
+            "subject": [{"name": n, "digest": {"sha256": _hex(d)}} for n, d in flat],
             "predicateType": predicate_type(predicate),
             "predicate": body,
         }

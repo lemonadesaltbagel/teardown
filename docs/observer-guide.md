@@ -101,7 +101,11 @@ p.api_contract()                                                       # value-f
 - Field probes find length limits and classify refusals as client-side (submit disabled / no request) or
   server-side (API 4xx).
 - A shared self-hosted backend means episodes run one at a time; give each run a fresh reset.
-- `api_contract()` is released with the spec: endpoints, statuses and body *shapes* (no values).
+- `api_contract()` is released with the spec: endpoints, statuses and body *shapes* (no values). Query values are
+  dropped; fold data-bearing path segments with `target_options={"api_templates": ["/api/articles/feed",
+  "/api/articles/{slug}", ...]}` (first match wins, so list literal paths first).
+- An unknown you have since answered: `p.update_unknown(id, "resolved" | "out-of-scope" | "investigating", note)`.
+  Resolved ones leave the release; the audit log keeps the history.
 - Inventory for `coverage`: pages/routes, every form and field, every button/link action, every API endpoint.
 - **Fault injection** (error handling is invisible on a healthy backend): an action
   `{"op": "fault", "fault": {"path": "/api/articles*", "mode": "status|abort|timeout|malformed", "status": 500}}`
@@ -123,7 +127,7 @@ p.api_contract()                                                       # value-f
   once per process and replayed; scripts and API calls to them stay blocked. `p.blocked_hosts([actions])` lists
   what an episode tried to load from blocked hosts (host + resource type).
 - **Clock-dependent text**: dates rendered from server timestamps (creation times) change between observation and
-  verification days. Use `set_mapper("web.aria/v1", {"mask_dates": True})` before probing when the app shows them;
+  verification days. Use `p.set_mapper(params={"mask_dates": True})` before probing when the app shows them;
   `compile_spec` records an unknown if expected text contains dates while they are not masked.
 - Route and network symbols include query strings (`/?feed=following`, `GET /api/articles?limit=10&offset=0`):
   state rules about pagination and filters through them.

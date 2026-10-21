@@ -92,3 +92,12 @@ def test_violation_bound_matches_rule_of_three():
     assert violation_upper_bound(0, 0) == 1.0
     assert abs(violation_upper_bound(100, 0) - 0.0295) < 0.001  # ~3/n
     assert violation_upper_bound(10, 5) > violation_upper_bound(10, 1) > violation_upper_bound(10, 0)
+
+
+def test_audit_accepts_lists_of_subjects(tmp_path):
+    from teardown.audit.log import AuditLog
+
+    log = AuditLog(tmp_path / "audit.jsonl")
+    entry = log.append("x", {"claims": ["clm_" + "a" * 64, "clm_" + "b" * 64]}, {})
+    assert [s["name"] for s in entry["statement"]["subject"]] == ["claims[0]", "claims[1]"]
+    assert log.verify() == 1
