@@ -232,3 +232,18 @@ def test_clock_dates_are_flagged_as_unknown_until_masked(tmp_path):
                         {"mask_dates": True})["text"] == ["Published <date>"]
     finally:
         site.close()
+
+
+def test_blocked_hosts_are_reported(tmp_path):
+    root = tmp_path / "site"
+    root.mkdir()
+    (root / "cdn.html").write_text('<!doctype html><html lang="en"><head>'
+                                   '<link rel="stylesheet" href="https://cdn.invalid/icons.css"></head>'
+                                   "<body><main><h1>Icons</h1></main></body></html>")
+    site = LocalSite(root)
+    try:
+        project = Project(tmp_path / "p")
+        project.open_target("web:" + site.url("cdn.html"), purpose="research")
+        assert project.blocked_hosts() == [{"host": "cdn.invalid", "type": "stylesheet"}]
+    finally:
+        site.close()

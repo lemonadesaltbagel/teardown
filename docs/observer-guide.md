@@ -120,7 +120,8 @@ p.api_contract()                                                       # value-f
   is observed). If the app's layout depends on a CDN stylesheet or icon font, observations differ from a real
   deployment (icons with zero size, for instance). Name those hosts in
   `target_options={"profile": {"asset_hosts": ["<cdn host>"]}}`: their stylesheets, fonts and images are fetched
-  once per process and replayed; scripts and API calls to them stay blocked.
+  once per process and replayed; scripts and API calls to them stay blocked. `p.blocked_hosts([actions])` lists
+  what an episode tried to load from blocked hosts (host + resource type).
 - **Clock-dependent text**: dates rendered from server timestamps (creation times) change between observation and
   verification days. Use `set_mapper("web.aria/v1", {"mask_dates": True})` before probing when the app shows them;
   `compile_spec` records an unknown if expected text contains dates while they are not masked.

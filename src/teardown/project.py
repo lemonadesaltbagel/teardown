@@ -333,6 +333,24 @@ class Project:
     def falsify_claim(self, claim_id: str, repeats: int = 3):
         return self.ledger.falsify(claim_id, self.session(), repeats=repeats)
 
+    def blocked_hosts(self, actions: list[str] | None = None) -> list[dict[str, str]]:
+        """Third-party hosts the web determinism profile refused during one episode (reset + ``actions``): which
+        stylesheets, fonts or scripts the app tried to load. Candidates for ``profile.asset_hosts`` when layout
+        depends on them."""
+        state = self.state
+        if not state.target_spec.startswith("web:"):
+            raise ValueError("blocked_hosts is for web targets")
+        from teardown.drivers.base import Action
+
+        driver = open_driver(state.target_spec, self.action_table(), state.target_options)
+        try:
+            driver.reset()
+            for name in actions or []:
+                driver.step(Action(name=name))
+            return [{"host": h, "type": t} for h, t in sorted(driver.blocked)]
+        finally:
+            driver.close()
+
     def _flag_clock_text(self, feature: str, probes: Any, rule_table: Any) -> None:
         """Calendar dates in expected UI text usually come from a clock (server creation times) and drift between
         observation and verification. Unless the abstraction masks them, say so as an unknown."""

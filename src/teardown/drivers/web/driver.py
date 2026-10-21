@@ -177,6 +177,7 @@ class WebDriver(Driver):
         self._held: list[Any] = []
         self._hang_handlers: list[Any] = []
         self._allowed: set[str] | None = None  # hosts the context gate lets through (None: no gate)
+        self.blocked: set[tuple[str, str]] = set()  # (host, resource type) the gate refused, across episodes
         self._ctx = None
         self.page = None
         self._inflight = 0
@@ -246,6 +247,7 @@ class WebDriver(Driver):
                         status, headers, body = _ASSETS[req.url]
                         route.fulfill(status=status, headers=headers, body=body)
                     else:
+                        self.blocked.add((host or "", req.resource_type))
                         route.abort()
                 except Exception:  # noqa: BLE001 - page/context closed meanwhile: the request is gone anyway
                     pass
