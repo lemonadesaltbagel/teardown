@@ -269,3 +269,34 @@ def test_fault_path_globs_respect_segments():
     article = path_glob("/api/articles/*")
     assert article("/api/articles/my-post") and not article("/api/articles/my-post/comments")
     assert path_glob("/api/**")("/api/articles/x/comments") and path_glob("/quotes.json")("/quotes.json")
+
+
+def test_rule_checks_with_unknown_keys_are_rejected_not_passed_vacuously(site, tmp_path):
+    project = Project(tmp_path / "p")
+    project.open_target("web:" + site.url("fetcher.html"), purpose="research")
+    project.define_actions({"load": {"op": "click", "role": "button", "name": "Load quotes"},
+                            "stay": {"op": "goto", "value": "fetcher.html"}})
+    dotted = [{"statement": "Loading keeps the button.",
+               "checks": [{"kind": "same", "a": {"actions": ["stay"]}, "b": {"actions": ["load"]},
+                           "keys": ["controls.button:Load quotes"]}]}]
+    with pytest.raises(ValueError, match="unknown key 'controls.button:Load quotes'"):
+        project.check_rules("quotes", dotted, workers=1)
+    fine = [{**dotted[0], "checks": [{**dotted[0]["checks"][0], "keys": ["headings"]}]}]
+    assert project.check_rules("quotes", fine, workers=1)["rules"][0]["status"] == "corroborated"
+
+
+def test_reopening_keeps_work_cannot_relax_strict_and_rules_can_be_retracted(site, tmp_path):
+    project = Project(tmp_path / "p")
+    target = "web:" + site.url("fetcher.html")
+    project.open_target(target, purpose="research", strict=True)
+    project.define_actions({"load": {"op": "click", "role": "button", "name": "Load quotes"}})
+    rule = {"statement": "Loading shows the heading.",
+            "checks": [{"kind": "outcome", "a": {"actions": ["load"]}, "expect": {"headings": ["Quotes"]}}]}
+    rid = project.check_rules("quotes", [rule], workers=1)["rules"][0]["id"]
+    with pytest.raises(PermissionError):
+        project.open_target(target, purpose="research", strict=False)
+    project.open_target(target, purpose="research", strict=True, target_options={"api_templates": ["/x/{id}"]})
+    assert "load" in project.state.actions and "quotes" in project.state.rules
+    assert project.retract_rule("quotes", rid, "superseded") == 0
+    with pytest.raises(KeyError):
+        project.retract_rule("quotes", rid, "again")

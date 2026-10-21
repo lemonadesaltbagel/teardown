@@ -265,3 +265,13 @@ def android_a11y(observation: Any, params: dict[str, Any]) -> Any:
 
 
 BUILTINS["android.a11y/v1"] = android_a11y
+
+
+# Top-level keys each built-in abstraction can produce (some are omitted when empty). Rule checks that name other
+# keys would compare nothing; see ``unknown_keys``.
+KNOWN_KEYS = {
+    "cli.behavior/v1": {"exit", "signal", "timed_out", "stdout", "stdout_truncated", "diagnostic", "errno", "fs"},
+    "web.aria/v1": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract"},
+    "desktop.a11y/v1": {"windows", "controls", "text", "items"},
+    "android.a11y/v1": {"controls", "text", "system"},
+}

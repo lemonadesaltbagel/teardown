@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from teardown.core.model import Evidence
 from teardown.gate.gate import GateMode
@@ -24,8 +25,32 @@ INSTRUCTIONS = (
 UNTRUSTED = {"untrusted_content": True, "source": "analysis_target"}
 
 
+def _explaining(tool_decorator):
+    """Wrap ``server.tool``: anticipated failures (bad arguments, unknown names, refusals) reach the observer with
+    their message instead of a bare "Error executing tool"."""
+    import functools
+
+    from pydantic import ValidationError
+
+    def register(*args, **kwargs):
+        def wrap(fn):
+            @functools.wraps(fn)
+            def call(*a, **k):
+                try:
+                    return fn(*a, **k)
+                except (ValueError, KeyError, TypeError, PermissionError, FileNotFoundError, ValidationError) as exc:
+                    raise ToolError(f"{type(exc).__name__}: {exc}") from exc
+
+            return tool_decorator(*args, **kwargs)(call)
+
+        return wrap
+
+    return register
+
+
 def build_observe_server(project: Project) -> MCPServer:
     server = MCPServer(name="teardown-observe", instructions=INSTRUCTIONS)
+    server.tool = _explaining(server.tool)
 
     @server.tool(description="Open a target and record intake (declared purpose, jurisdiction, ToS snapshot). "
                  "target: cli:docker:<image> | cli:build:<dir> | cli:local | web:<url> | android:<serial>:<package> | "
@@ -160,6 +185,11 @@ def build_observe_server(project: Project) -> MCPServer:
     @server.tool(description="Record something that could not be observed (missing coverage is unknown, not absence).")
     def record_unknown(feature: str, question: str, recommended_probes: list[str] | None = None) -> dict[str, Any]:
         return project.ledger.record_unknown(feature, question, recommended_probes).model_dump(mode="json")
+
+    @server.tool(description="Retract one of your rules (e.g. superseded by a reworded version), with a reason. "
+                 "Rule ids are in check_rules results.")
+    def retract_rule(feature: str, rule_id: str, reason: str) -> dict[str, Any]:
+        return {"rules_left": project.retract_rule(feature, rule_id, reason)}
 
     @server.tool(description="Mark an unknown resolved / out-of-scope / investigating (or reopen it) with a note. "
                  "Resolved unknowns leave the release; the audit log keeps the history.")

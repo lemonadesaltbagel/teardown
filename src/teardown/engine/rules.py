@@ -99,6 +99,24 @@ def projection(symbol: str, keys: list[str] | None) -> Any:
     return value
 
 
+def unknown_keys(specs: list[RuleSpec], symbols: dict[str, str], known: set[str] | None) -> list[str]:
+    """Keys named by checks (``keys``, top-level ``expect`` keys) that the abstraction does not produce and no
+    observed symbol contains. Such a key compares nothing: a ``same`` check on it passes vacuously."""
+    seen = set(known or ())
+    for symbol in symbols.values():
+        value = describe_symbol(symbol)
+        if isinstance(value, dict):
+            seen |= set(value)
+    problems = []
+    for spec in specs:
+        for i, check in enumerate(spec.checks):
+            named = set(check.keys or []) | (set(check.expect) if isinstance(check.expect, dict) else set())
+            named.discard("value")  # non-dict symbols (NA, DISABLED) are written {"value": ...}
+            for key in sorted(named - seen):
+                problems.append(f"rule {spec.statement[:60]!r} check {i}: unknown key {key!r}")
+    return problems
+
+
 def evaluate(check: RuleCheck, symbols: dict[str, str]) -> CheckResult:
     a = action_id(check.a)
     b = action_id(check.b) if check.b else None

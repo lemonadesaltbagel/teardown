@@ -227,6 +227,10 @@ class Project:
             max_actions_per_second=max_actions_per_second,
         )
         self.workspace.put(intake)
+        previous = self.state if (self.root / "project.json").exists() else None
+        if previous is not None and previous.gate.mode is GateMode.STRICT and not strict:
+            driver.close()
+            raise PermissionError("this project is in strict mode; reopening the target cannot relax it")
         mapper = default_mapper(target_spec, target)
         self.workspace.put(mapper)
         gate = GateConfig(
@@ -235,8 +239,19 @@ class Project:
             denylist=sorted(set(real_names or [])),
         )
         self.root.mkdir(parents=True, exist_ok=True)
-        self._save(ProjectState(target_spec=target_spec, target=target, intake=intake.id, mapper=mapper.id, gate=gate,
-                                target_options=dict(target_options or {})))
+        state = ProjectState(target_spec=target_spec, target=target, intake=intake.id, mapper=mapper.id, gate=gate,
+                             target_options=dict(target_options or {}))
+        if previous is not None and previous.target_spec == target_spec:
+            # Reopening the same target (new options, a new intake): keep the work done so far. A mapper the
+            # observer built stays; so do approvals and quotes, which are tied to the same codename.
+            keep_gate = previous.gate.codename == gate.codename
+            state = state.model_copy(update={
+                "mapper": previous.mapper, "models": previous.models, "probes": previous.probes,
+                "rules": previous.rules, "actions": previous.actions, "coverage": previous.coverage,
+                "coverage_approvals": previous.coverage_approvals,
+                "gate": gate.model_copy(update={"quotes": previous.gate.quotes,
+                                                "approvals": previous.gate.approvals}) if keep_gate else gate})
+        self._save(state)
         notes = warnings_for(intake)
         self.audit.append(
             "intake",
@@ -356,6 +371,26 @@ class Project:
 
     def falsify_claim(self, claim_id: str, repeats: int = 3):
         return self.ledger.falsify(claim_id, self.session(), repeats=repeats)
+
+    def retract_rule(self, feature: str, rule_id: str, reason: str) -> int:
+        """Remove a rule from the feature's rule table (e.g. superseded by a reworded one). The retraction and its
+        reason are audited; returns the number of rules left."""
+        from teardown.engine.rules import RuleTable
+
+        state = self.state
+        if feature not in state.rules:
+            raise KeyError(f"no rules for feature {feature!r}")
+        table = self.workspace.get(state.rules[feature], RuleTable)
+        kept = [r for r in table.rules if r.id != rule_id]
+        if len(kept) == len(table.rules):
+            raise KeyError(f"no rule {rule_id} in feature {feature!r}")
+        new = RuleTable(feature=table.feature, target=table.target, mapper=table.mapper, actions=table.actions,
+                        rules=kept)
+        self.workspace.put(new)
+        self._save(state.model_copy(update={"rules": {**state.rules, feature: new.id}}))
+        self.audit.append("rule-retracted", {"rules": new.id}, {"feature": feature, "rule": rule_id,
+                                                                "reason": reason})
+        return len(kept)
 
     def update_unknown(self, unknown_id: str, status: str, note: str = "") -> dict[str, Any]:
         """Mark an unknown investigating / resolved / out-of-scope (or reopen it), with a note saying why. Resolved
@@ -785,6 +820,17 @@ class Project:
             first |= {r.probe.id: r.symbol for r in run_probes(self._worker_session, probes, workers=workers)}
             second |= {r.probe.id: r.symbol for r in run_probes(self._worker_session, probes, workers=workers)}
         unstable = {k for k in first if first[k] != second[k]}
+        from teardown.engine.abstractions import KNOWN_KEYS
+
+        version = self.workspace.get(self.state.mapper, MapperVersion)
+        known = KNOWN_KEYS.get(version.builtin or "") if not version.rules else None
+        bad = R.unknown_keys(specs, first, known)
+        if bad:
+            valid = sorted(known or set().union(*[set(d) for d in (R.describe_symbol(s) for s in first.values())
+                                                  if isinstance(d, dict)] or [set()]))
+            raise ValueError(f"checks name keys that no symbol has, so they would compare nothing: {bad[:5]}. "
+                             f"Top-level keys are {valid}; nested values (e.g. one control) are compared through "
+                             f"their top-level key with an outcome check's subset expectation.")
         records = []
         for spec in specs:
             results = [R.evaluate(c, first) for c in spec.checks]
@@ -811,7 +857,7 @@ class Project:
         self.audit.append("rules-checked", {"table": table.id}, {
             "feature": feature, "rules": len(records), "corroborated": sum(r.status == "corroborated" for r in records),
             "falsified": sum(r.status == "falsified" for r in records), "conflicts": len(conflicts)})
-        return {"table": table.id, "rules": [{"statement": r.statement, "status": r.status,
+        return {"table": table.id, "rules": [{"id": r.id, "statement": r.statement, "status": r.status,
                                               "failed_checks": [i for i, c in enumerate(r.checks) if not c.holds],
                                               "suggestions": R.suggest(r) if r.status != "corroborated" else []}
                                              for r in records]}
@@ -826,13 +872,16 @@ class Project:
                         boundary: bool = True, workers: int = 4) -> dict[str, Any]:
         """Probe one form field: every class (plus the length boundary) is filled after ``prefix`` and submitted.
 
-        ``valid`` names a class known to be accepted; it defines the acceptance reference for the boundary search.
+        ``valid`` names a class known to be accepted, or is a literal value known to be accepted (added as class
+        ``valid``); it defines the acceptance reference for the boundary search.
         """
         from teardown.engine import fieldprobe as fp
         from teardown.engine.mining import mine
 
         workers = self.max_workers(workers)
         values = dict(classes or fp.CLASSES.get(kind, fp.TEXT))
+        if valid is not None and valid not in values:  # a literal accepted value rather than a class name
+            values["valid"], valid = valid, "valid"
         valid = valid or ("valid" if "valid" in values else "typical" if "typical" in values else None)
 
         platform = self.state.target_spec.split(":", 1)[0]
