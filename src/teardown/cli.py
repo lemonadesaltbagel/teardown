@@ -10,6 +10,7 @@ from pathlib import Path
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="teardown", description=__doc__)
+    parser.add_argument("--version", action="version", version=f"teardown {_version()}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     observe = sub.add_parser("observe", help="run the dirty-side observe MCP server (stdio, or HTTP with --port)")
@@ -331,6 +332,15 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"release": rel.id, "codename": rel.codename, "mode": rel.mode,
                           "findings": len(rel.report.findings), "approved_by": rel.report.approved_by}, indent=1))
     return 0
+
+
+def _version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("teardown")
+    except PackageNotFoundError:
+        return "unknown"
 
 
 def _draft_id(project, args) -> str:

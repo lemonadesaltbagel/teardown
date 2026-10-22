@@ -1,6 +1,6 @@
 [project]
 name = "teardown"
-version = "0.0.1"
+version = "0.1.0"
 description = "Clean-room, behavior-first analysis of applications: observe black-box, mine falsifiable behavior claims, release a sanitized spec, and differential-test a clean reimplementation."
 readme = "README.md"
 license = "Apache-2.0"

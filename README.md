@@ -249,7 +249,9 @@ declare your purpose at intake and own the legal assessment.
 
 ## Contributing
 
-Issues and pull requests are welcome.
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the ground rules, and report
+anything that could let information cross the clean-room barrier privately through [SECURITY.md](SECURITY.md).
+Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ```bash
 uv sync
