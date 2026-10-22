@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+### Observer productivity
+
+- `discover_ui`: a bounded crawl that clicks every enabled control and fills forms. Screens are identified by
+  route, headings, controls and enablement, and pages that differ only in data are explored once.
+- UI coverage from discovery (every control and field), plus endpoint × fault coverage.
+- `suggest_probes`: gaps become ready-made fault actions with a path that triggers them, field-probe
+  arguments, and click paths.
+- The observer playbook (`docs/observer-playbook.md`), served as the `observe_target` MCP prompt.
+
+### Web observation
+
+- `web.aria/v2`, the default for new web projects. It adds page title, focus, status messages, dialogs, select
+  options, `aria-current`, and table cells, and undoes Playwright's YAML quoting for names with `#` or `:`.
+  `web.aria/v1` is unchanged, so existing specs keep verifying.
+
+### Fixes
+
+- UI coverage counts only actions a probe or rule runs.
+- Coverage resolves its own gap unknowns once covered.
+- Observer-side errors carry their message.
+- The room images copy the license files and the packaged playbook.
+
+### Results
+
+- First held-out web result, Kilnroll: 64/120 with the frozen tooling. The misses are what `v2` now records
+  (`research/15`).
+
 ## 0.1.0 (2026-10-22)
 
 First public release.
