@@ -9,6 +9,7 @@ points of agreement while behavior-level comparison recovered 20.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Callable
 from typing import Any
@@ -102,21 +103,47 @@ _VALUE_ROLES = {"textbox", "searchbox", "combobox", "spinbutton"}
 _CONTROL_ROLES = _VALUE_ROLES | {"button", "checkbox", "radio", "switch", "link", "slider", "tab", "menuitem"}
 
 
-def parse_aria(snapshot: str) -> list[dict[str, Any]]:
+def _yaml_scalar(text: str) -> str:
+    """Unquote a YAML scalar as Playwright writes it ('single' with '' escapes, "double" with backslash
+    escapes); anything else is returned as is."""
+    t = text.strip()
+    if len(t) >= 2 and t[0] == t[-1] == "'":
+        return t[1:-1].replace("''", "'")
+    if len(t) >= 2 and t[0] == t[-1] == '"':
+        try:
+            return json.loads(t)
+        except ValueError:
+            return t[1:-1]
+    return t
+
+
+def parse_aria(snapshot: str, yaml_strings: bool = False) -> list[dict[str, Any]]:
+    """``yaml_strings`` (web.aria/v2): undo Playwright's YAML quoting. An entry whose name holds ``#``, ``:`` or
+    quotes is written as one single-quoted scalar, and quoted text values keep their quotes otherwise."""
     nodes = []
     for raw in snapshot.splitlines():
         m = _ARIA_LINE.match(raw)
         if not m:
             continue
-        body = m.group("body").rstrip(":")
+        body = m.group("body")
+        if yaml_strings:
+            body = body.rstrip()
+            colon = body.endswith(":") and body.startswith("'") and body[:-1].endswith("'")
+            if body.startswith("'") and (body.endswith("'") or colon):
+                body = _yaml_scalar(body[:-1] if colon else body)
+        body = body.rstrip(":")
         r = _ARIA_ROLE.match(body)
         if not r:
             depth = len(m.group("indent")) // 2
             nodes.append({"depth": depth, "role": "text", "name": None, "attrs": [], "text": body})
             continue
         attrs = re.findall(r"\[([^\]]*)\]", r.group("attrs") or "")
-        nodes.append({"depth": len(m.group("indent")) // 2, "role": r.group("role"), "name": r.group("name"),
-                      "attrs": attrs, "text": r.group("text")})
+        name, text = r.group("name"), r.group("text")
+        if yaml_strings:
+            name = json.loads(f'"{name}"') if name is not None else None  # names use JSON-style escapes
+            text = _yaml_scalar(text) if text is not None else None
+        nodes.append({"depth": len(m.group("indent")) // 2, "role": r.group("role"), "name": name,
+                      "attrs": attrs, "text": text})
     return nodes
 
 
@@ -127,7 +154,10 @@ CALENDAR_DATE = re.compile(rf"\b(?:(?:{_MONTHS})\.? \d{{1,2}}(?:st|nd|rd|th)?,? 
                            r"|\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?Z?)?)\b")
 
 
-def web_aria(observation: Any, params: dict[str, Any]) -> Any:
+_TABLE_ROLES = {"cell", "gridcell", "rowheader", "columnheader"}
+
+
+def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
     """Structured, wording-agnostic view of an accessibility snapshot.
 
     Output keys: ``path`` (URL path), ``headings`` (h1-h2 names), ``alerts`` (alert texts), ``text`` (other
@@ -145,7 +175,7 @@ def web_aria(observation: Any, params: dict[str, Any]) -> Any:
     out: dict[str, Any] = {"path": observation.get("path", "/"), "headings": [], "alerts": [], "text": [],
                            "controls": {}}
     skip_depth = None
-    for n in parse_aria(observation["aria"]):
+    for n in parse_aria(observation["aria"], yaml_strings=version >= 2):
         if skip_depth is not None and n["depth"] > skip_depth:
             continue
         skip_depth = None
@@ -159,6 +189,8 @@ def web_aria(observation: Any, params: dict[str, Any]) -> Any:
             out["alerts"].append(n["name"] or n["text"] or "")
         elif role in ("paragraph", "text", "strong", "emphasis", "listitem") and (n["text"] or "").strip():
             out["text"].append(n["text"].strip())
+        elif version >= 2 and role in _TABLE_ROLES and (n["name"] or n["text"] or "").strip():
+            out["text"].append((n["name"] or n["text"]).strip())  # table contents are shown values
         elif role in _CONTROL_ROLES:
             flags = sorted(a for a in n["attrs"] if a in ("checked", "disabled", "expanded", "pressed", "selected"))
             if role in _VALUE_ROLES:
@@ -181,6 +213,9 @@ def web_aria(observation: Any, params: dict[str, Any]) -> Any:
 
 
 BUILTINS["web.aria/v1"] = web_aria
+# v2: Playwright's YAML quoting undone (names with '#', ':' or quotes), table cells and headers in `text`.
+# v1 stays as it was so that specs released under it keep verifying against their recorded symbols.
+BUILTINS["web.aria/v2"] = lambda observation, params: web_aria(observation, params, version=2)
 
 
 # -- desktop -----------------------------------------------------------------------------------------------------
@@ -272,6 +307,7 @@ BUILTINS["android.a11y/v1"] = android_a11y
 KNOWN_KEYS = {
     "cli.behavior/v1": {"exit", "signal", "timed_out", "stdout", "stdout_truncated", "diagnostic", "errno", "fs"},
     "web.aria/v1": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract"},
+    "web.aria/v2": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract"},
     "desktop.a11y/v1": {"windows", "controls", "text", "items"},
     "android.a11y/v1": {"controls", "text", "system"},
 }

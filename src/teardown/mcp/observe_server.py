@@ -46,8 +46,13 @@ def _explaining(tool_decorator):
                 try:
                     with lock:
                         return fn(*a, **k)
+                except ToolError:
+                    raise
                 except (ValueError, KeyError, TypeError, PermissionError, FileNotFoundError, ValidationError) as exc:
                     raise ToolError(f"{type(exc).__name__}: {exc}") from exc
+                except Exception as exc:  # noqa: BLE001 - dirty side: the observer may see driver/target errors
+                    raise ToolError(f"{type(exc).__name__}: {exc} (an error while running the target; the "
+                                    "project state is unchanged unless the message says otherwise)") from exc
 
             return tool_decorator(*args, **kwargs)(call)
 

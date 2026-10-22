@@ -330,3 +330,35 @@ def test_discover_ui_crawls_screens_defines_actions_and_drives_coverage(site, tm
     suggestions = project.suggest_probes("signup")
     field = next(s for s in suggestions if s["kind"] == "field")
     assert field["call"]["tool"] == "probe_web_field" and field["call"]["name"]
+
+
+def test_web_aria_v2_reads_quoted_names_and_table_cells():
+    from teardown.engine.abstractions import BUILTINS
+
+    snap = "\n".join([
+        "- main:",
+        "  - 'heading \"Piece #3: \\\"Vase\\\"\" [level=1]'",
+        "  - 'link \"Vase #3\"':",
+        "    - /url: /x",
+        "  - paragraph: \"Note: done\"",
+        "  - table:",
+        "    - row \"Clay Stoneware\":",
+        "      - rowheader \"Clay\"",
+        "      - cell \"Stoneware\"",
+    ])
+    v2 = BUILTINS["web.aria/v2"]({"aria": snap, "path": "/"}, {})
+    assert v2["headings"] == ['Piece #3: "Vase"'] and "link:Vase #3" in v2["controls"]
+    assert v2["text"] == ["Note: done", "Clay", "Stoneware"]
+
+
+def test_coverage_resolves_its_own_unknowns_once_covered(site, tmp_path):
+    project = Project(tmp_path / "p")
+    project.open_target("web:" + site.url("fetcher.html"), purpose="research")
+    project.define_actions({"load": {"op": "click", "role": "button", "name": "Load quotes"}})
+    project.coverage("quotes", {"loading": ["Load quotes"]})  # nothing exercised yet -> an unknown
+    project.check_rules("quotes", [{"statement": "Loading shows the heading.", "checks": [
+        {"kind": "outcome", "a": {"actions": ["load"]}, "expect": {"headings": ["Quotes"]}}]}], workers=1)
+    project.coverage("quotes", {"loading": ["Load quotes"]})
+    open_gaps = [u for u in project.ledger.unknowns().values()
+                 if u.status == "open" and "loading" in u.identity.question]
+    assert not open_gaps

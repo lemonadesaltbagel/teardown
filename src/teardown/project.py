@@ -132,7 +132,7 @@ def default_mapper(target_spec: str, target: str) -> MapperVersion:
     if target_spec.startswith("cli:"):
         return MapperVersion(target=target, builtin="cli.behavior/v1", note="CLI behavior-level abstraction")
     if target_spec.startswith("web:"):
-        return MapperVersion(target=target, builtin="web.aria/v1", note="structured accessibility snapshot")
+        return MapperVersion(target=target, builtin="web.aria/v2", note="structured accessibility snapshot")
     if target_spec.startswith("desktop:"):
         return MapperVersion(target=target, builtin="desktop.a11y/v1", note="structured AT-SPI snapshot")
     if target_spec.startswith("android:"):
@@ -439,12 +439,12 @@ class Project:
         if not self.state.target_spec.startswith("web:"):
             return
         version = self.workspace.get(self.state.mapper, MapperVersion)
-        if version.builtin != "web.aria/v1":
+        if version.builtin not in ("web.aria/v1", "web.aria/v2"):
             return
         if (version.params or {}).get("mask_dates"):  # masked now: an earlier clock unknown is answered
             for u in self.ledger.unknowns().values():
                 if u.identity.feature == feature and u.status == "open" and "calendar dates" in u.identity.question:
-                    self.update_unknown(u.id, "resolved", "dates are masked (web.aria/v1 mask_dates)")
+                    self.update_unknown(u.id, "resolved", "dates are masked (web.aria mask_dates)")
             return
         from teardown.engine.abstractions import CALENDAR_DATE
 
@@ -454,7 +454,7 @@ class Project:
             self.ledger.record_unknown(
                 feature, f"Expected UI text contains calendar dates ({', '.join(dates[:3])}): if they come from a "
                          "clock (e.g. creation times) they drift and verification turns inconclusive; mask them "
-                         "(web.aria/v1 param mask_dates) or confirm they are fixed data.",
+                         "(web.aria param mask_dates) or confirm they are fixed data.",
                 ["re-run a date-bearing check on another day", "set_mapper(params={'mask_dates': True})"])
 
     def compile_spec(self, feature: str) -> SpecDraft:
@@ -766,8 +766,10 @@ class Project:
                     for name in (c.a_inputs or []) + (c.b_inputs or []):
                         if name in named:
                             actions.append((name, named[name]))
-        if not state.target_spec.startswith("cli:"):
-            actions += list(state.actions.items())
+        if not state.target_spec.startswith("cli:"):  # UI: actions count only when a probe or rule runs them
+            named = self.action_table()
+            used = {n for seq in self._used_sequences(feature, table) for n in seq}
+            actions += [(n, named[n]) for n in sorted(used) if n in named]
 
         def exercises(entry: tuple[str, dict[str, Any]], pattern: str) -> bool:
             name, action = entry
@@ -794,6 +796,13 @@ class Project:
             for item in uncovered:
                 self.ledger.record_unknown(feature, f"not exercised by any probe or rule: {item}",
                                            ["add probes or a rule for this item"])
+            prefix = "not exercised by any probe or rule: "
+            now_covered = set(counts) - set(uncovered)
+            for u in self.ledger.unknowns().values():  # gaps this run shows covered are answered
+                q = u.identity.question
+                if (u.identity.feature == feature and u.status == "open" and q.startswith(prefix)
+                        and q[len(prefix):] in now_covered):
+                    self.update_unknown(u.id, "resolved", "covered by a probe or rule")
         self.audit.append("coverage", {}, {"feature": feature, "items": len(items), "uncovered": len(uncovered)})
         return {"items": len(items), "covered": len(items) - len(uncovered), "uncovered": uncovered,
                 "counts": counts}
