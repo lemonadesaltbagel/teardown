@@ -46,6 +46,7 @@ and what it does not.
 | novel tool, round 1 | CLI, private | spec / docs | 337/398 (84.7%) / 386/398 (97.0%) | 470/470 | examples-only spec (`research/10`) |
 | novel tool, round 2 | CLI, private | spec / hybrid / docs | 397/397 / 397/397 / 395/397 | 1144 / 0 / 1 | after rules + coverage; different tool than round 1 (`research/11`) |
 | RealWorld Conduit, rounds 1–4 | web, famous | spec + public selectors contract | 80 → 93 → 95 → 99 of 101 | 342 → 576 passing | development-set: tooling tuned between rounds; implementer recognized the app (`research/12`) |
+| Wickwright (novel Android app) | Android, private | spec only, both sides confined | 113/118 (95.8%) | 163 / 0 / 0 | first and only round; implementer did not recognize the app (`research/14`) |
 | Conduit (round-4 release) and the round-2 novel tool, in the enforced clean room | web / CLI | as above | 99/101 · 397/397 | 570 / 0 / 6 · 1144 / 0 / 1 | implementer inside the isolated container; same outcomes as with a prompt-only barrier (`research/13`) |
 
 What these numbers support:
@@ -57,7 +58,9 @@ What these numbers support:
   result is still owed.
 - **Enforced isolation costs nothing in outcome:** the same releases reimplemented inside the clean-room
   container scored the same as with a prompt-only barrier.
-- **Not yet measured:** Android and desktop against hidden suites; a held-out web target.
+- **Android:** a spec released by a confined observer through MCP alone rebuilt a novel three-screen app to 95.8%
+  of its hidden tests. The rest were orderings and messages the observer did not probe.
+- **Not yet measured:** desktop against a hidden suite; a held-out web target.
 
 ## Repeating it on your own target
 

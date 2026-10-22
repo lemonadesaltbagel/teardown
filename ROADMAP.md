@@ -155,7 +155,12 @@ novel tool with an independent observer agent: **spec arm 397/397**, hybrid (spe
 - [ ] Snapshot-load reset tier; determinism after load (clock via root on google_apis).
 - [ ] Network tiers N0/N1/N2; logcat reduced to system events; deep links/intent filters as interface facts.
 - [ ] Intake detectors (FLAG_SECURE, attestation failure, no-tree apps).
-- [ ] Bench: Loop Habit Tracker / Omni-Notes / AntennaPod with hidden Espresso suites (needs Gradle builds).
+- [x] Network-off fault (airplane mode, restored at reset); Gradle-free APK builds; `android:kit` clones via the gate.
+- [x] Hidden-suite benchmark: a novel app (Wickwright) + 118 scenarios run by an independent adb/uiautomator
+  harness; both sides confined: 113/118 (`research/14`).
+- [ ] Open from that round: subset matching inside nested maps for outcome checks; number-field boundary
+  labelling in field probes.
+- [ ] Bench on a public app (Loop Habit Tracker / Omni-Notes / AntennaPod) with hidden Espresso suites (Gradle).
 
 ## Phase 5: desktop, Linux then macOS (XL)
 

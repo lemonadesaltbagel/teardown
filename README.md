@@ -31,7 +31,7 @@ implementation-tier data at all.
 |---|---|---|
 | CLI | containerized runner (no network, read-only, unprivileged), help discovery, probe planner, decision-table mining, permission and stdio faults | **stable**: complete reimplementation of a private tool from the spec alone |
 | Web | Playwright, accessibility-tree symbols, field probing, rules over action sequences, fault injection, contract selectors, API contract | **stable**: 99/101 on RealWorld's E2E suite (development-set, see caveats) |
-| Android | adb plus an on-device UiAutomation agent | experimental: works on example apps; no hidden-suite result yet |
+| Android | adb plus an on-device UiAutomation agent, network-off fault, Gradle-free clone builds | **working**: 113/118 on a novel app's hidden suite, both sides confined (one round) |
 | Desktop (Linux) | Xvfb plus AT-SPI in a container | experimental: works on an example app |
 | macOS, Windows, iOS | — | not started |
 
