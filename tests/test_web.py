@@ -39,7 +39,8 @@ def test_driver_observes_behavior_tier_only(site):
     d = WebDriver("web:" + site.url("signup_a.html"))
     try:
         obs = d.reset()
-        assert set(obs) == {"path", "aria", "form", "network", "api_shapes"} and "<script" not in json.dumps(obs)
+        assert set(obs) == {"path", "aria", "form", "network", "api_shapes", "title", "focus", "current"}
+        assert "<script" not in json.dumps(obs)
         assert web_aria(obs, {})["headings"] == ["Your email"]
         assert d.step(_act(op="click", role="button", name="Nope")) is None  # absent -> NA
         d.step(_act(op="fill", role="textbox", name="Email", value="jane@example.com"))
@@ -362,3 +363,32 @@ def test_coverage_resolves_its_own_unknowns_once_covered(site, tmp_path):
     open_gaps = [u for u in project.ledger.unknowns().values()
                  if u.status == "open" and "loading" in u.identity.question]
     assert not open_gaps
+
+
+def test_web_aria_v2_observes_title_focus_status_dialogs_options_and_current(tmp_path):
+    from teardown.engine.abstractions import BUILTINS
+
+    root = tmp_path / "site"
+    root.mkdir()
+    (root / "page.html").write_text(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Pieces — App</title></head><body>'
+        '<nav aria-label="Main"><a href="#a" aria-current="page">Pieces</a><a href="#b">Firings</a></nav>'
+        '<label>Clay <select><option>Choose</option><option selected>Stoneware</option></select></label>'
+        '<label>Title <input id="t" autofocus></label><div role="status">Piece saved.</div>'
+        '<dialog open aria-label="Delete piece?"><button>Delete</button></dialog></body></html>')
+    site = LocalSite(root)
+    d = WebDriver("web:" + site.url("page.html"))
+    try:
+        obs = d.reset()
+        d.page.focus("#t")
+        obs = d.observe()
+        v2 = BUILTINS["web.aria/v2"](obs, {})
+        assert v2["title"] == "Pieces — App" and v2["focus"] == "textbox:Title"
+        assert v2["status"] == ["Piece saved."] and v2["dialogs"] == ["Delete piece?"]
+        assert v2["options"] == {"combobox:Clay": ["Choose", "Stoneware [selected]"]}
+        assert "current" in v2["controls"]["link:Pieces"] and "current" not in v2["controls"]["link:Firings"]
+        v1 = BUILTINS["web.aria/v1"](obs, {})
+        assert "title" not in v1 and "status" not in v1  # v1 unchanged
+    finally:
+        d.close()
+        site.close()

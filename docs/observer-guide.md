@@ -104,8 +104,17 @@ p.api_contract()                                                       # value-f
 
 - Actions address elements by **ARIA role and accessible name** only; values are what you type. A missing element
   makes the step `NA`; a disabled one `DISABLED`.
-- A symbol is the structured accessibility view: `path`, `headings`, `alerts`, `text`, `controls` (role:name →
-  state flags; textbox values reduced to filled/empty), `invalid`, `network` (API method, path template, status).
+- **A symbol is the structured accessibility view** (`web.aria/v2`, the default for new projects):
+  - `path`, `title`, `headings`, `alerts`;
+  - `status` (live-region messages such as "Saved.");
+  - `text` (including table cells);
+  - `controls` (role:name → state flags, including `current` for `aria-current`; textbox values reduced to
+    filled/empty);
+  - `options` (each combobox's options, the selected one marked);
+  - `dialogs`, `focus` (role:name of the focused element), `invalid`;
+  - `network` (API method, path template, status).
+
+  Projects created before v2 keep `web.aria/v1`.
 - Rules on UIs compare **sequences**: `{"actions": [...]}` on each side; restrict `keys` to what the rule is about
   (`controls`, `path`, `alerts`, `network`) so incidental text does not break the relation.
 - Field probes find length limits and classify refusals as client-side (submit disabled / no request) or

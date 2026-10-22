@@ -60,6 +60,35 @@ _FORM_PROBE = """() => Array.from(document.querySelectorAll('input, select, text
     .map(k => [k, el[k]]).filter(([k, v]) => v !== '' && v !== -1 && v !== undefined && v !== null))
 }))"""
 
+# Read-only probe of what the accessibility snapshot leaves out: the focused element and aria-current markers,
+# as role:name with the same simple computation on every page (original and clone alike).
+_STATE_PROBE = """() => {
+  const roleOf = el => {
+    const explicit = el.getAttribute('role'); if (explicit) return explicit;
+    const tag = el.tagName.toLowerCase(), type = (el.getAttribute('type') || '').toLowerCase();
+    if (tag === 'a' && el.hasAttribute('href')) return 'link';
+    if (tag === 'button' || ['button', 'submit', 'reset'].includes(type)) return 'button';
+    if (tag === 'select') return 'combobox';
+    if (tag === 'textarea') return 'textbox';
+    if (tag === 'input') return {checkbox: 'checkbox', radio: 'radio', range: 'slider', number: 'spinbutton',
+                                 search: 'searchbox'}[type] || 'textbox';
+    return tag;
+  };
+  const labelledBy = el => {
+    const ref = el.getAttribute('aria-labelledby') && document.getElementById(el.getAttribute('aria-labelledby'));
+    return ref ? ref.textContent : '';
+  };
+  const nameOf = el => (el.getAttribute('aria-label') || (el.labels && el.labels[0] && el.labels[0].textContent) ||
+                        labelledBy(el) ||
+                        (['link', 'button'].includes(roleOf(el)) ? el.textContent : '') ||
+                        el.getAttribute('placeholder') || '').replace(/\s+/g, ' ').trim();
+  const a = document.activeElement;
+  const focus = a && a !== document.body && a !== document.documentElement ? roleOf(a) + ':' + nameOf(a) : null;
+  const current = Array.from(document.querySelectorAll('[aria-current]'))
+    .filter(el => el.getAttribute('aria-current') !== 'false').map(el => roleOf(el) + ':' + nameOf(el));
+  return {focus, current};
+}"""
+
 _SEED_RANDOM = """(() => {
   let s = 0x2545F491;
   const next = () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; return (s >>> 0) / 4294967296; };
@@ -502,6 +531,8 @@ class WebDriver(Driver):
             # value-free JSON shapes of API bodies (keys and types only): the interface, not the data
             "api_shapes": [e for e in exchanges if e.get("request_shape") or e.get("response_shape")],
             **({"contract": self.page.evaluate(_CONTRACT_PROBE, self.contract)} if self.contract else {}),
+            "title": self.page.title(),
+            **self.page.evaluate(_STATE_PROBE),
         }
 
     def actions(self) -> list[str]:

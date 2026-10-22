@@ -171,10 +171,12 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
     """
     if not isinstance(observation, dict) or "aria" not in observation:
         return observation
-    drop_roles = set(params.get("drop_roles", ["status"]))
+    # v1 dropped live regions (role=status) as noise; v2 keeps them: flash and confirmation messages are behavior
+    drop_roles = set(params.get("drop_roles", ["status"] if version < 2 else []))
     out: dict[str, Any] = {"path": observation.get("path", "/"), "headings": [], "alerts": [], "text": [],
                            "controls": {}}
     skip_depth = None
+    combobox = None  # v2: options belong to the combobox above them
     for n in parse_aria(observation["aria"], yaml_strings=version >= 2):
         if skip_depth is not None and n["depth"] > skip_depth:
             continue
@@ -183,6 +185,18 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
         if role in drop_roles:
             skip_depth = n["depth"]
             continue
+        if version >= 2 and role == "status":
+            if (n["name"] or n["text"] or "").strip():
+                out.setdefault("status", []).append((n["name"] or n["text"]).strip())
+            continue
+        if version >= 2 and role in ("dialog", "alertdialog"):
+            out.setdefault("dialogs", []).append(n["name"] or "")
+        if version >= 2 and role == "option" and n["name"] is not None and combobox is not None:
+            out.setdefault("options", {}).setdefault(combobox, []).append(
+                n["name"] + (" [selected]" if "selected" in n["attrs"] else ""))
+            continue
+        if version >= 2 and role == "combobox":
+            combobox = f"combobox:{n['name'] or ''}"
         if role == "heading" and any(a in ("level=1", "level=2") for a in n["attrs"]):
             out["headings"].append(n["name"] or n["text"] or "")
         elif role == "alert":
@@ -203,9 +217,18 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
         out["network"] = [f"{m} {p} {s}" for m, p, s in observation["network"]]
     if observation.get("contract"):  # public-contract selectors: absent | hidden | empty | content
         out["contract"] = dict(sorted(observation["contract"].items()))
+    if version >= 2:  # what the accessibility snapshot leaves out
+        if observation.get("title"):
+            out["title"] = observation["title"]
+        if observation.get("focus"):
+            out["focus"] = observation["focus"]
+        for marked in observation.get("current") or []:
+            if marked in out["controls"] and "current" not in out["controls"][marked]:
+                out["controls"][marked] = sorted([*out["controls"][marked], "current"])
     if params.get("mask_dates"):
-        for key in ("headings", "alerts", "text"):
-            out[key] = [CALENDAR_DATE.sub("<date>", t) for t in out[key]]
+        for key in ("headings", "alerts", "text", "status"):
+            if key in out:
+                out[key] = [CALENDAR_DATE.sub("<date>", t) for t in out[key]]
     for key in ("alerts", "text"):
         if not out[key]:
             out.pop(key)
@@ -307,7 +330,8 @@ BUILTINS["android.a11y/v1"] = android_a11y
 KNOWN_KEYS = {
     "cli.behavior/v1": {"exit", "signal", "timed_out", "stdout", "stdout_truncated", "diagnostic", "errno", "fs"},
     "web.aria/v1": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract"},
-    "web.aria/v2": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract"},
+    "web.aria/v2": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract", "title",
+                    "focus", "status", "dialogs", "options"},
     "desktop.a11y/v1": {"windows", "controls", "text", "items"},
     "android.a11y/v1": {"controls", "text", "system"},
 }
