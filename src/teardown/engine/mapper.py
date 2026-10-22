@@ -113,5 +113,20 @@ def symbol_matches(observed: str, expected: str | None, match: str = "exact") ->
         got = {"value": got}  # non-dict symbols (NA, DISABLED) are written {"value": ...} in outcome expectations
     if not isinstance(want, dict) or not isinstance(got, dict):
         return observed == expected
-    # an expected empty list also matches an absent key (abstractions omit empty collections)
-    return all((k in got and got[k] == v) or (k not in got and v == []) for k, v in want.items())
+    return _subset(want, got)
+
+
+def _subset(want: dict, got: dict) -> bool:
+    """Every expected key matches; nested objects (e.g. ``controls``) are subsets too, so an expectation can name
+    one control without listing all of them. An expected empty list also matches an absent key (abstractions omit
+    empty collections)."""
+    for k, v in want.items():
+        if k not in got:
+            if v != []:
+                return False
+        elif isinstance(v, dict) and isinstance(got[k], dict):
+            if not _subset(v, got[k]):
+                return False
+        elif got[k] != v:
+            return False
+    return True

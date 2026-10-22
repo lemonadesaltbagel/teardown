@@ -132,11 +132,14 @@ def build_observe_server(project: Project) -> MCPServer:
                  "(text/email/password/"
                  "number or custom `classes`), a length-boundary search, per-class outcomes and folded claims. "
                  "`prefix` = named actions that reach the form; `submit` = the named action that submits it. "
-                 "Boundary classes become named actions you can add to learn_flow's alphabet.")
+                 "Boundary classes become named actions you can add to learn_flow's alphabet. When accepted values "
+                 "change the outcome (computed results), say what acceptance looks like: accepted_if = {subset: {...}} "
+                 "and/or {text_contains: '...'}. Number fields skip the length search (their limits are ranges).")
     def probe_web_field(feature: str, prefix: list[str], role: str, name: str, submit: str, kind: str = "text",
-                        classes: dict[str, str] | None = None, valid: str | None = None) -> dict[str, Any]:
+                        classes: dict[str, str] | None = None, valid: str | None = None,
+                        accepted_if: dict[str, Any] | None = None, boundary: bool | None = None) -> dict[str, Any]:
         return project.probe_web_field(feature, prefix=prefix, role=role, name=name, submit=submit, kind=kind,
-                                       classes=classes, valid=valid)
+                                       classes=classes, valid=valid, accepted_if=accepted_if, boundary=boundary)
 
     @server.tool(description="Check observer-authored rules against the original. Each rule: {statement (your own "
                  "words), origin: documented|inferred-intent|observed, kind, checks: [{kind: outcome|same|differs, "

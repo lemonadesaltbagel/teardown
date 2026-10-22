@@ -77,3 +77,15 @@ def test_field_outcomes_mask_the_typed_value_and_its_slug_but_not_short_values()
                  "network": ["GET /api/articles/another-title 200"]}, "Another Title")
     assert a == b  # two accepted titles have the same outcome once their echo is masked
     assert outcome({"text": ["a cat"]}, "a")["text"] == ["a cat"]
+
+
+def test_subset_expectations_are_subsets_at_every_level():
+    import json
+
+    from teardown.engine.mapper import symbol_matches
+
+    observed = json.dumps({"controls": {"button:Go": ["disabled"], "textbox:Name": ["empty"]}, "text": ["Hi"]})
+    assert symbol_matches(observed, json.dumps({"controls": {"button:Go": ["disabled"]}}), "subset")
+    assert not symbol_matches(observed, json.dumps({"controls": {"button:Go": []}}), "subset")
+    assert not symbol_matches(observed, json.dumps({"controls": {"button:Stop": ["disabled"]}}), "subset")
+    assert symbol_matches(observed, json.dumps({"alerts": []}), "subset")

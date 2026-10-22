@@ -908,16 +908,25 @@ class Project:
 
     def probe_web_field(self, feature: str, *, prefix: list[str], role: str, name: str, submit: str,
                         kind: str = "text", classes: dict[str, str] | None = None, valid: str | None = None,
-                        boundary: bool = True, workers: int = 4) -> dict[str, Any]:
+                        boundary: bool | None = None, accepted_if: dict[str, Any] | None = None,
+                        workers: int = 4) -> dict[str, Any]:
         """Probe one form field: every class (plus the length boundary) is filled after ``prefix`` and submitted.
 
         ``valid`` names a class known to be accepted, or is a literal value known to be accepted (added as class
         ``valid``); it defines the acceptance reference for the boundary search.
+
+        ``accepted_if`` defines acceptance when accepted values change the outcome (a calculator's result, a slug):
+        ``{"subset": {...}}`` and/or ``{"text_contains": "..."}`` (see ``fieldprobe.acceptance``). ``boundary``
+        (the length search) defaults to on for text-like fields and off for numbers, whose limits are value ranges
+        (probe those with classes).
         """
         from teardown.engine import fieldprobe as fp
         from teardown.engine.mining import mine
 
         workers = self.max_workers(workers)
+        boundary = kind != "number" if boundary is None else boundary
+        accept = fp.acceptance(accepted_if)
+        keys = fp.OUTCOME_KEYS + tuple(k for k in (accepted_if or {}).get("subset", {}) if k not in fp.OUTCOME_KEYS)
         values = dict(classes or fp.CLASSES.get(kind, fp.TEXT))
         if valid is not None and valid not in values:  # a literal accepted value rather than a class name
             values["valid"], valid = valid, "valid"
@@ -939,7 +948,7 @@ class Project:
             session = self._worker_session()
             try:
                 ref_inputs = [*prefix, fill_action(valid, values[valid])[0], submit]
-                reference = fp.outcome(describe_symbol(session.run(ref_inputs, use_cache=False)[0][-1]))
+                reference = fp.outcome(describe_symbol(session.run(ref_inputs, use_cache=False)[0][-1]), keys=keys)
 
                 def probe_once(value: str) -> str:
                     act_name, spec = fill_action("probe", value)
@@ -949,7 +958,7 @@ class Project:
                     session.step(act_name, params=spec)
                     return session.step(submit)[1]
 
-                boundary_found = fp.length_boundary(probe_once, kind, reference)
+                boundary_found = fp.length_boundary(probe_once, kind, reference, accept=accept, keys=keys)
             finally:
                 session.close()
             if boundary_found is not None:
@@ -966,7 +975,7 @@ class Project:
         typed = {p.id: values[p.id.rsplit("=", 1)[1]] for p in probes}
 
         def outcome_of(result) -> dict[str, Any]:
-            return fp.outcome(describe_symbol(result.symbol), typed[result.probe.id])
+            return fp.outcome(describe_symbol(result.symbol), typed[result.probe.id], keys=keys)
 
         nondet = {r.probe.id for r in first if fp.outcome_json(r.symbol, typed[r.probe.id])
                   != fp.outcome_json(second[r.probe.id], typed[r.probe.id])}
@@ -993,9 +1002,11 @@ class Project:
         self._save(self.state.model_copy(update={"probes": {**self.state.probes, feature: table.id}}))
         reference_outcome = next((describe_symbol(r.symbol) for r in first
                                   if r.probe.id.endswith(f"={valid}")), None) if valid else None
-        is_refused, describe = fp.judge(reference_outcome)
-        mined, mixed = mine(feature, "the form", first, exclude=nondet, outcome=fp.outcome, describe=describe,
-                            refused=is_refused)
+        is_refused, describe = fp.judge(reference_outcome, accept)
+        import functools
+
+        mined, mixed = mine(feature, "the form", first, exclude=nondet,
+                            outcome=functools.partial(fp.outcome, keys=keys), describe=describe, refused=is_refused)
         for m in mined:
             checks = [_drop_masked_text(c) for c in m.checks]
             head, *rest = checks

@@ -157,6 +157,10 @@ p.probe_web_field("calc", prefix=[...], role="textbox", name="Amount", submit="g
   - `text`: visible text;
   - `system`: system dialogs.
 - **Not observed.** Resource ids and activity names are never part of observations.
+- **Fields whose accepted values change the result** (a calculator's total): pass `accepted_if`, e.g.
+  `{"text_contains": "total"}` or `{"subset": {"controls": {"button:Add": []}}}`, so each class is judged by
+  what acceptance looks like, not by equality with the known-good value's outcome. Number fields skip the length
+  search; probe their ranges with classes (`min`, `max`, `over`, ...).
 - **The soft keyboard** can take the first Back. If Back matters in a flow, observe what it does both with and
   without the keyboard open.
 - **Coverage inventory:** screens, every field and its validation, every button and toggle, list behavior (caps,

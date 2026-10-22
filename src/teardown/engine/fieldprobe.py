@@ -71,7 +71,29 @@ def _echo_patterns(echo: str | None) -> list[re.Pattern]:
             if len(n) >= 3]
 
 
-def outcome(symbol: Any, echo: str | None = None) -> dict[str, Any]:
+def acceptance(accepted_if: dict[str, Any] | None):
+    """The observer's own definition of 'accepted' for a field, or None (then: same outcome as the known-good value).
+
+    ``{"subset": {...}}``: the outcome contains this (subset at every level, e.g. one control's flags);
+    ``{"text_contains": "..."}``: some visible text line contains the string. Both may be given.
+    """
+    if not accepted_if:
+        return None
+    from teardown.engine.mapper import _subset
+
+    want, needle = accepted_if.get("subset"), accepted_if.get("text_contains")
+
+    def accept(result: dict[str, Any]) -> bool:
+        if result.get("value") in ("DISABLED", "NA"):
+            return False
+        if want is not None and not _subset(want, result):
+            return False
+        return needle is None or any(needle in t for t in result.get("text", []) if isinstance(t, str))
+
+    return accept
+
+
+def outcome(symbol: Any, echo: str | None = None, keys: tuple[str, ...] = OUTCOME_KEYS) -> dict[str, Any]:
     """Acceptance-deciding part of a web.aria symbol (keys absent from the symbol stay absent).
 
     ``echo`` is the value the probe typed: where the page shows it back (a greeting, a profile link), it is replaced
@@ -79,7 +101,7 @@ def outcome(symbol: Any, echo: str | None = None) -> dict[str, Any]:
     """
     if not isinstance(symbol, dict):
         return {"value": symbol}
-    out = {k: symbol[k] for k in OUTCOME_KEYS if k in symbol}
+    out = {k: symbol[k] for k in keys if k in symbol}
     patterns = _echo_patterns(echo)
     if patterns:
         def mask(x: Any) -> Any:
@@ -96,12 +118,15 @@ def outcome(symbol: Any, echo: str | None = None) -> dict[str, Any]:
     return out
 
 
-def judge(reference: dict[str, Any] | None):
-    """(refused, describe) for one field: accepted means 'same outcome as the known-good value'."""
+def judge(reference: dict[str, Any] | None, accept=None):
+    """(refused, describe) for one field: accepted means the observer's ``accept`` predicate holds, or else 'same
+    outcome as the known-good value'."""
 
     def refused(result: dict[str, Any]) -> bool:
         if result.get("value") in ("DISABLED", "NA"):
             return True
+        if accept is not None:
+            return not accept(result)
         if reference is not None:
             return result != reference
         return bool(result.get("alerts") or result.get("invalid"))
@@ -112,7 +137,7 @@ def judge(reference: dict[str, Any] | None):
         if result.get("value") == "NA":
             return "is refused before submission (submit is not offered)"
         if not refused(result):
-            return "is accepted (same outcome as the known-good value)"
+            return ("is accepted" if accept is not None else "is accepted (same outcome as the known-good value)")
         detail = []
         if result.get("alerts"):
             detail.append(f"{len(result['alerts'])} alert(s)")
@@ -178,27 +203,32 @@ def run_sequences(open_session: Callable[[], ObservationSession], probes: list[S
     return [r for _, r in sorted(results, key=lambda x: x[0])]
 
 
-def accepted(symbol: str, reference: dict[str, Any]) -> bool:
-    """A value is accepted when the post-submit outcome equals the reference (known-good) outcome."""
-    return outcome(describe_symbol(symbol)) == reference
+def accepted(symbol: str, reference: dict[str, Any], accept=None, keys: tuple[str, ...] = OUTCOME_KEYS) -> bool:
+    """A value is accepted when ``accept`` holds for its outcome, or else when the post-submit outcome equals the
+    reference (known-good) outcome."""
+    result = outcome(describe_symbol(symbol), keys=keys)
+    return accept(result) if accept is not None else result == reference
 
 
 def length_boundary(probe_once: Callable[[str], str], kind: str, reference: dict[str, Any], *,
-                    hi: int = 4096) -> int | None:
+                    hi: int = 4096, accept=None, keys: tuple[str, ...] = OUTCOME_KEYS) -> int | None:
     """Largest accepted length (exponential then binary search). None if even a short value is refused, or if
     nothing up to ``hi`` is refused (no limit observed)."""
+    import functools
+
+    accepted_ = functools.partial(accepted, accept=accept, keys=keys)
     lo = 1 if kind != "email" else len("a@example.com")
-    if not accepted(probe_once(value_for_length(kind, lo)), reference):
+    if not accepted_(probe_once(value_for_length(kind, lo)), reference):
         return None
     n = lo
-    while n < hi and accepted(probe_once(value_for_length(kind, n * 2)), reference):
+    while n < hi and accepted_(probe_once(value_for_length(kind, n * 2)), reference):
         n *= 2
     if n >= hi:
         return None
     good, bad = n, min(n * 2, hi)
     while bad - good > 1:
         mid = (good + bad) // 2
-        if accepted(probe_once(value_for_length(kind, mid)), reference):
+        if accepted_(probe_once(value_for_length(kind, mid)), reference):
             good = mid
         else:
             bad = mid

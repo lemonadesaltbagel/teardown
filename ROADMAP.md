@@ -158,8 +158,8 @@ novel tool with an independent observer agent: **spec arm 397/397**, hybrid (spe
 - [x] Network-off fault (airplane mode, restored at reset); Gradle-free APK builds; `android:kit` clones via the gate.
 - [x] Hidden-suite benchmark: a novel app (Wickwright) + 118 scenarios run by an independent adb/uiautomator
   harness; both sides confined: 113/118 (`research/14`).
-- [ ] Open from that round: subset matching inside nested maps for outcome checks; number-field boundary
-  labelling in field probes.
+- [x] From that round: outcome checks are subsets at every level; field probes take `accepted_if` (the observer's
+  definition of acceptance) and skip the length search for numbers.
 - [ ] Bench on a public app (Loop Habit Tracker / Omni-Notes / AntennaPod) with hidden Espresso suites (Gradle).
 
 ## Phase 5: desktop, Linux then macOS (XL)

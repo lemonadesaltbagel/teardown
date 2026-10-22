@@ -111,3 +111,22 @@ def test_android_kit_clone_is_built_installed_and_verified_and_network_fault_res
                               capture_output=True, text=True).stdout.strip() == "0"
     finally:
         driver.close()
+
+
+def test_field_probe_with_observer_defined_acceptance(tmp_path):
+    from teardown.project import Project
+
+    project = Project(tmp_path / "p")
+    project.open_target(f"android:{SERIAL}:com.example.tipper", purpose="research")
+    project.define_actions(ACTIONS)
+    # every accepted bill amount gives a different total, so 'same outcome as the reference' cannot decide
+    result = project.probe_ui_field("bill", prefix=[], role="textbox", name="Bill amount", submit="calculate",
+                                    kind="number", classes={"small": "1", "typical": "80", "max": "10000",
+                                                            "over": "10001", "zero": "0"},
+                                    valid="typical", accepted_if={"text_contains": "total"})
+    assert result["boundary"] is None  # numbers: no length search
+    statements = [c.identity.statement for c in project.ledger.all().values()]
+    accepted = [s for s in statements if "is accepted" in s]
+    refused = [s for s in statements if "is refused" in s]
+    assert any("max" in s for s in accepted) and any("small" in s for s in accepted)
+    assert any("over" in s for s in refused) and any("zero" in s for s in refused)
