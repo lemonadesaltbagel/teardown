@@ -16,10 +16,12 @@ from __future__ import annotations
 import hmac
 import json
 import threading
+import traceback
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from teardown.cleanroom import CloneError
 from teardown.mcp.clean_server import CleanRoom
 
 
@@ -66,12 +68,19 @@ def serve(room: CleanRoom, host: str = "127.0.0.1", port: int = 0, token: str | 
                 if self.path == "/verify":
                     return self._send(200, room.verify_against_original(body["clone"], body.get("adapter")))
                 if self.path == "/tickets":
-                    return self._send(200, room.ask_question(body["question"]))
+                    try:
+                        return self._send(200, room.ask_question(body["question"]))
+                    except (KeyError, ValueError) as exc:  # the gate's own validation messages
+                        return self._send(400, {"error": str(exc)})
                 return self._send(404, {"error": "not found"})
-            except PermissionError as exc:  # budget exceeded, strict-mode refusals
+            except PermissionError as exc:  # budget exceeded, strict-mode refusals, clone-target allowlist
                 return self._send(403, {"error": str(exc)})
-            except (KeyError, ValueError) as exc:
+            except CloneError as exc:  # the clone's own build/install output: clean-side information
                 return self._send(400, {"error": str(exc)})
+            except Exception:  # noqa: BLE001 - anything else may carry dirty-side detail: log it, say nothing
+                traceback.print_exc()
+                return self._send(500, {"error": "verification could not run on the gate (an infrastructure "
+                                                 "error, not a verdict about your build); try again later"})
 
     server = ThreadingHTTPServer((host, port), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()

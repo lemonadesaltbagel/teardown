@@ -213,6 +213,10 @@ def export_android_kit(project_root: Path, out: Path, rel) -> str:
     return str(out)
 
 
+class CloneError(ValueError):
+    """A problem with the clone itself (build or install output): safe to report to the clean side verbatim."""
+
+
 def verify_kit(project, kit: Path, clone: str, adapter: dict | None = None) -> dict:
     """Verify a clone built from the kit: ``web:kit`` (static site from impl/), ``android:kit`` (APK from the kit's
     manifest and sources, installed on the original's device), ``cli:build:/kit`` (the kit's Dockerfile)."""
@@ -229,19 +233,26 @@ def verify_kit(project, kit: Path, clone: str, adapter: dict | None = None) -> d
         import subprocess
         import tempfile
 
-        from teardown.drivers.android.build import build_apk, manifest_package
+        from teardown.drivers.android.build import BuildFailed, build_apk, manifest_package
         from teardown.drivers.android.driver import adb_path
 
         _, serial, _ = project.state.target_spec.split(":", 2)
-        package = manifest_package(kit / "AndroidManifest.xml")
+        try:
+            package = manifest_package(kit / "AndroidManifest.xml")
+        except BuildFailed as exc:
+            raise CloneError(str(exc)) from exc
         if not package.startswith("clone."):
-            raise ValueError("the clone's package must start with 'clone.' (it must not replace the original)")
+            raise CloneError("the clone's package must start with 'clone.' (it must not replace the original)")
         with tempfile.TemporaryDirectory(prefix="teardown-clone-") as tmp:
-            apk = build_apk(kit, Path(tmp) / "clone.apk")
+            try:
+                apk = build_apk(kit, Path(tmp) / "clone.apk")
+            except BuildFailed as exc:
+                raise CloneError(str(exc)) from exc
             cp = subprocess.run([adb_path(), "-s", serial, "install", "-r", "-t", str(apk)], capture_output=True,
                                 text=True, timeout=300)
             if cp.returncode != 0 or "Success" not in cp.stdout:
-                raise ValueError(f"install failed: {(cp.stdout + cp.stderr)[-1000:]}")
+                # adb's own output about installing the clone's APK (no original's data in it)
+                raise CloneError(f"install failed: {(cp.stdout + cp.stderr)[-600:]}")
         options = {k: v for k, v in project.state.target_options.items() if k != "activity"}
         adapter = {**(adapter or {}), "target_options": options}
         return project.verifier().verify(f"android:{serial}:{package}", adapter=adapter).model_dump(mode="json")

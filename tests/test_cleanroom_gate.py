@@ -36,3 +36,37 @@ def test_kit_gate_verifies_web_kit_and_refuses_other_targets(tmp_path):
     finally:
         site.close()
         shutdown_browser()
+
+
+def test_gate_service_never_forwards_unexpected_error_text(tmp_path):
+    import json
+    import urllib.error
+    import urllib.request
+
+    from teardown.cleanroom import CloneError
+    from teardown.gate.service import serve
+    from teardown.mcp.clean_server import CleanRoom
+
+    def verify(clone, adapter=None):
+        if clone == "boom":
+            raise RuntimeError("no launcher activity for com.example.realname")  # dirty detail
+        raise CloneError("javac failed: Main.java:3: error: ';' expected")  # the clone's own output
+
+    server = serve(CleanRoom(tmp_path / "rel", tmp_path / "tickets", verify), "127.0.0.1", 0, "t")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        def post(clone):
+            req = urllib.request.Request(f"http://127.0.0.1:{server.server_address[1]}/verify",
+                                         data=json.dumps({"clone": clone}).encode(), method="POST",
+                                         headers={"Authorization": "Bearer t"})
+            try:
+                opener.open(req, timeout=10)
+            except urllib.error.HTTPError as exc:
+                return exc.code, json.loads(exc.read())["error"]
+
+        code, message = post("boom")
+        assert code == 500 and "realname" not in message and "infrastructure" in message
+        code, message = post("bad-build")
+        assert code == 400 and "';' expected" in message
+    finally:
+        server.shutdown()
