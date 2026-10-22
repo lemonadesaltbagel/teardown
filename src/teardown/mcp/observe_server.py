@@ -23,6 +23,9 @@ INSTRUCTIONS = (
 )
 
 UNTRUSTED = {"untrusted_content": True, "source": "analysis_target"}
+PLAYBOOK_FALLBACK = ("Open the target; discover_ui; probe every field; inject faults on every endpoint; state rules "
+                     "on navigation, state, enablement, lists, derived values and defaults; loop coverage -> "
+                     "suggest_probes until every gap is exercised or explained; compile, review, release.")
 
 
 def _explaining(tool_decorator):
@@ -56,6 +59,19 @@ def _explaining(tool_decorator):
 def build_observe_server(project: Project) -> MCPServer:
     server = MCPServer(name="teardown-observe", instructions=INSTRUCTIONS)
     server.tool = _explaining(server.tool)
+
+    @server.prompt(name="observe_target", description="The observer playbook: discover, probe, inject faults, "
+                   "state rules, close coverage gaps, release.")
+    def observe_target(target: str = "", feature: str = "app") -> str:
+        from importlib.resources import files
+        from pathlib import Path
+
+        packaged = files("teardown") / "observer-playbook.md"  # in an installed wheel
+        source = Path(__file__).resolve().parents[3] / "docs" / "observer-playbook.md"  # in a checkout
+        text = (packaged.read_text(encoding="utf-8") if packaged.is_file() else
+                source.read_text(encoding="utf-8") if source.exists() else PLAYBOOK_FALLBACK)
+        head = f"Target: {target}\nFeature name: {feature}\n\n" if target else ""
+        return head + text
 
     @server.tool(description="Open a target and record intake (declared purpose, jurisdiction, ToS snapshot). "
                  "target: cli:docker:<image> | cli:build:<dir> | cli:local | web:<url> | android:<serial>:<package> | "
@@ -213,6 +229,20 @@ def build_observe_server(project: Project) -> MCPServer:
     @server.tool(description="Record something that could not be observed (missing coverage is unknown, not absence).")
     def record_unknown(feature: str, question: str, recommended_probes: list[str] | None = None) -> dict[str, Any]:
         return project.ledger.record_unknown(feature, question, recommended_probes).model_dump(mode="json")
+
+    @server.tool(description="UI targets: crawl from the start screen (or after the named `start` actions, e.g. a "
+                 "sign-in) clicking every enabled control; screens are identified by route, headings and controls. "
+                 "Defines a click[role:name] action for every control found and records the inventory that "
+                 "coverage and suggest_probes use. Start here, then probe fields and state rules.")
+    def discover_ui(feature: str, start: list[str] | None = None, max_states: int = 25,
+                    max_depth: int = 4, fill: bool = True) -> dict[str, Any]:
+        return project.discover_ui(feature, start=start, max_states=max_states, max_depth=max_depth, fill=fill)
+
+    @server.tool(description="Concrete next steps for the feature's coverage gaps: fault actions with a path that "
+                 "makes the call, probe_web_field arguments for unprobed fields, click paths for unexercised "
+                 "controls. Run after discover_ui and after each batch of rules.")
+    def suggest_probes(feature: str, limit: int = 30) -> list[dict[str, Any]]:
+        return project.suggest_probes(feature, limit)
 
     @server.tool(description="Retract one of your rules (e.g. superseded by a reworded version), with a reason. "
                  "Rule ids are in check_rules results.")

@@ -12,6 +12,7 @@ Directory layout under the project root::
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -175,6 +176,12 @@ class ProjectState(BaseModel):
                                            description="driver options, e.g. reset_command, reset_check_url, "
                                                        "contract_selectors, profile (web determinism profile "
                                                        "overrides such as asset_hosts)")
+
+
+def path_glob_match(glob: str, path: str) -> bool:
+    from teardown.drivers.web.driver import path_glob
+
+    return path_glob(glob)(path)
 
 
 class Project:
@@ -777,7 +784,9 @@ class Project:
                   for item, patterns in items.items()}
         if state.target_spec.startswith("web:"):
             counts.update(self._fault_coverage(feature, table))
-            items.update({k: [] for k in counts if k not in items})
+        if not state.target_spec.startswith("cli:"):
+            counts.update(self._ui_coverage(feature, table))
+        items.update({k: [] for k in counts if k not in items})
         uncovered = sorted(i for i, n in counts.items() if n == 0)
         self._save(self.state.model_copy(update={"coverage": {**self.state.coverage, feature: {
             "items": len(items), "uncovered": uncovered}}}))
@@ -789,6 +798,134 @@ class Project:
         return {"items": len(items), "covered": len(items) - len(uncovered), "uncovered": uncovered,
                 "counts": counts}
 
+    # -- UI discovery and suggestions -----------------------------------------------------------------------------
+    def discover_ui(self, feature: str, *, start: list[str] | None = None, max_states: int = 25, max_depth: int = 4,
+                    max_episodes: int = 200, fill: bool = True) -> dict[str, Any]:
+        """Crawl the UI from the start screen (or after the named ``start`` actions): click every enabled control,
+        identify screens by route, headings and controls. Defines a ``click[role:name]`` action for every control
+        found and stores the inventory, which ``coverage`` and ``suggest_probes`` then use."""
+        from teardown.engine import discovery as D
+
+        state = self.state
+        platform = state.target_spec.split(":", 1)[0]
+        if platform not in ("web", "android", "desktop"):
+            raise ValueError("discover_ui is for UI targets (web, android, desktop)")
+        table = self.action_table()
+        missing = [a for a in start or [] if a not in table]
+        if missing:
+            raise KeyError(f"unknown start actions: {missing}")
+        result = D.crawl(self._worker_session, platform, start=[(a, table[a]) for a in start or []],
+                         max_states=max_states, max_depth=max_depth, max_episodes=max_episodes, fill=fill,
+                         describe=describe_symbol)
+        self.define_actions(result["actions"])
+        path = self.root / "discovery" / f"{feature}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(D.as_json(result), encoding="utf-8")
+        self.audit.append("ui-discovery", {}, {"feature": feature, "screens": len(result["screens"]),
+                                               "episodes": result["episodes"], "truncated": result["truncated"]})
+        return {"screens": [{"id": k, **v} for k, v in result["screens"].items()],
+                "transitions": len(result["transitions"]), "episodes": result["episodes"],
+                "truncated": result["truncated"], "actions_defined": sorted(result["actions"])}
+
+    def _discovery(self, feature: str) -> dict[str, Any] | None:
+        path = self.root / "discovery" / f"{feature}.json"
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+    def _used_sequences(self, feature: str, table: Any) -> list[list[str]]:
+        """Action sequences the feature's probe rows and rule checks actually run."""
+        from teardown.engine.rules import RuleTable
+
+        used: list[list[str]] = [[*r.prefix, r.action] for r in (table.rows if table else [])]
+        if feature in self.state.rules:
+            for rule in self.workspace.get(self.state.rules[feature], RuleTable).rules:
+                used += [c.a_inputs or [] for c in rule.checks] + [c.b_inputs or [] for c in rule.checks]
+        return used
+
+    def _ui_coverage(self, feature: str, table: Any) -> dict[str, int]:
+        """Discovered controls and fields -> how many probe/rule sequences click or fill them."""
+        from teardown.engine.discovery import split_control
+
+        found = self._discovery(feature)
+        if not found:
+            return {}
+        named = self.action_table()
+        touched: list[tuple[str, str, str]] = []  # (verb, role, name)
+        for seq in self._used_sequences(feature, table):
+            for n in seq:
+                spec = named.get(n) or {}
+                verb = spec.get("op") or spec.get("action")
+                if verb in ("click", "fill", "check", "uncheck", "select", "press", "longclick"):
+                    touched.append(("fill" if verb in ("fill", "select") else "click", spec.get("role"),
+                                    spec.get("name")))
+        counts: dict[str, int] = {}
+        for screen in found["screens"].values():
+            for control in sorted({*screen["clickable"], *screen.get("clickable_when_filled", [])}):
+                role, name = split_control(control)
+                counts[f"control {control}"] = sum(1 for v, r, nm in touched if v == "click" and nm == name and
+                                                   r in (role, None))
+            for field in screen["fields"]:
+                role, name = split_control(field)
+                counts[f"field {field}"] = sum(1 for v, r, nm in touched if v == "fill" and nm == name)
+        return counts
+
+    def suggest_probes(self, feature: str, limit: int = 30) -> list[dict[str, Any]]:
+        """Concrete next steps for the feature's coverage gaps: ready-made fault actions with a path that makes
+        the call, field-probe arguments for unprobed fields, click paths for unexercised controls."""
+        from teardown.engine.discovery import split_control
+
+        report = self.coverage(feature, record_unknowns=False)
+        found = self._discovery(feature) or {"screens": {}, "transitions": []}
+        screens = found["screens"]
+        named = self.action_table()
+        out: list[dict[str, Any]] = []
+
+        def screen_with(kind: str, key: str) -> dict[str, Any] | None:
+            return next((sc for sc in screens.values() if key in sc[kind]), None)
+
+        for item in report["uncovered"]:
+            if item.startswith("fault "):
+                _, method, path, cls = item.split(" ", 3)
+                glob = re.sub(r"\{[^}]+\}", "*", path)
+                mode = {"5xx": {"mode": "status", "status": 500}, "network": {"mode": "abort"},
+                        "malformed": {"mode": "malformed"}}[cls]
+                fault = {"op": "fault", "fault": {"path": glob, "method": method, **mode}}
+                trigger = next((t for t in found["transitions"]
+                                if any(e.split(" ")[:2] == [method, e.split(" ")[1]] and
+                                       path_glob_match(glob, e.split(" ")[1].split("?")[0])
+                                       for e in t["network"])), None)
+                reach = screens.get(trigger["from"], {}).get("via", []) + [trigger["action"]] if trigger else None
+                out.append({"item": item, "kind": "fault", "action": fault,
+                            "reach": reach or "no discovered path makes this call; it may happen at start-up "
+                                              "(put the fault first and reset) or after a form submission",
+                            "suggest": "define the fault action and state a rule on what the UI shows with "
+                                       "[fault, ...reach]"})
+            elif item.startswith("field "):
+                control = item.split(" ", 1)[1]
+                role, name = split_control(control)
+                screen = screen_with("fields", control)
+                submit = next((c for c in (screen or {}).get("clickable", []) + (screen or {}).get("disabled", [])
+                               if split_control(c)[0] in ("button", "push button")), None)
+                kind = ("email" if "mail" in name.lower() else "password" if "password" in name.lower() else
+                        "number" if any(w in name.lower() for w in ("amount", "count", "number", "age", "price",
+                                                                     "percent", "quantity", "size")) else "text")
+                out.append({"item": item, "kind": "field",
+                            "call": {"tool": "probe_web_field", "role": role, "name": name, "kind": kind,
+                                     "prefix": (screen or {}).get("via", []),
+                                     "submit": f"click[{submit}]" if submit else None},
+                            "suggest": "check prefix/submit (submit may need other fields filled first via prefix)"})
+            elif item.startswith("control "):
+                control = item.split(" ", 1)[1]
+                screen = screen_with("clickable", control)
+                act = f"click[{control}]"
+                out.append({"item": item, "kind": "control", "sequence": [*(screen or {}).get("via", []), act],
+                            "defined": act in named,
+                            "suggest": "state a rule on what this control does (outcome, or same/differs)"})
+            else:
+                out.append({"item": item, "kind": "other", "suggest": "add a probe or rule that exercises it"})
+            if len(out) >= limit:
+                break
+        return out
+
     FAULT_CLASSES = {"5xx": "a server error", "network": "a network failure or timeout",
                      "malformed": "a malformed body"}
 
@@ -796,13 +933,8 @@ class Project:
         """Web: every observed API endpoint x fault class (5xx, network, malformed) -> how many probe or rule
         sequences inject that fault there. Only faults actually used in a sequence count, not merely defined ones."""
         from teardown.drivers.web.driver import path_glob
-        from teardown.engine.rules import RuleTable
 
-        state = self.state
-        used: list[list[str]] = [[*r.prefix, r.action] for r in (table.rows if table else [])]
-        if feature in state.rules:
-            for rule in self.workspace.get(state.rules[feature], RuleTable).rules:
-                used += [c.a_inputs or [] for c in rule.checks] + [c.b_inputs or [] for c in rule.checks]
+        used = self._used_sequences(feature, table)
         named = self.action_table()
         faults: list[dict[str, Any]] = []
         for seq in used:

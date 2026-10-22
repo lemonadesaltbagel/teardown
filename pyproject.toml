@@ -30,6 +30,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/teardown"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"docs/observer-playbook.md" = "teardown/observer-playbook.md"
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"

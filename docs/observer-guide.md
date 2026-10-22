@@ -76,6 +76,16 @@ state, so only the program's own changes show up as file effects.
 
 Release only when `coverage` reports no uncovered inventory items, or record why as unknowns.
 
+## UI targets: start with discovery
+
+For web, Android and desktop targets, follow [observer-playbook.md](observer-playbook.md) (also served as the
+`observe_target` MCP prompt).
+
+- `discover_ui(feature, start=[...])` crawls the app and defines `click[role:name]` and `fill[name]=sample`
+  actions. It records every screen and the path that reaches it.
+- `coverage` then lists every discovered control and field.
+- `suggest_probes(feature)` turns the gaps into ready-made next steps.
+
 ## Web targets
 
 ```python

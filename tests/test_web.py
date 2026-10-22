@@ -315,3 +315,18 @@ def test_coverage_lists_every_observed_endpoint_by_fault_class(site, tmp_path):
     faults = {k: v for k, v in report["counts"].items() if k.startswith("fault ")}
     assert faults == {"fault GET /quotes.json 5xx": 0, "fault GET /quotes.json network": 1,
                       "fault GET /quotes.json malformed": 0}  # 'broken' is defined but never used
+
+
+def test_discover_ui_crawls_screens_defines_actions_and_drives_coverage(site, tmp_path):
+    project = Project(tmp_path / "p")
+    project.open_target("web:" + site.url("signup_a.html"), purpose="research")
+    found = project.discover_ui("signup", max_states=10, max_depth=3)
+    assert found["screens"] and found["episodes"] > 0
+    assert any(a.startswith("click[button:") for a in found["actions_defined"])
+    first = found["screens"][0]
+    assert first["fields"]  # the wizard's first step has text fields
+    report = project.coverage("signup", record_unknowns=False)
+    assert any(i.startswith("field ") for i in report["uncovered"])
+    suggestions = project.suggest_probes("signup")
+    field = next(s for s in suggestions if s["kind"] == "field")
+    assert field["call"]["tool"] == "probe_web_field" and field["call"]["name"]
