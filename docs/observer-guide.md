@@ -136,3 +136,29 @@ p.api_contract()                                                       # value-f
   `compile_spec` records an unknown if expected text contains dates while they are not masked.
 - Route and network symbols include query strings (`/?feed=following`, `GET /api/articles?limit=10&offset=0`):
   state rules about pagination and filters through them.
+
+## Android targets
+
+```python
+p.open_target("android:emulator-5554:com.example.app", purpose="research", real_names=["<app name>"])
+p.define_actions({"amount": {"action": "fill", "role": "textbox", "name": "Amount", "value": "80"},
+                  "go": {"action": "click", "role": "button", "name": "Calculate"},
+                  "offline": {"action": "network", "value": "off"},     # airplane mode, restored at reset
+                  "back": {"action": "back"}})
+p.probe_web_field("calc", prefix=[...], role="textbox", name="Amount", submit="go", kind="number")  # any UI target
+```
+
+- **Episodes.** Every episode starts from cleared app data and a cold launch. Steps address elements by
+  accessibility role and name: the text, or the content description for fields and icon buttons.
+- **Actions.** `click`, `fill`, `longclick`, `key` (a keycode), `back`, `network` (`off` | `on`).
+- **Symbols** (`android.a11y/v1`):
+  - `controls`: role:name → flags, i.e. `disabled`, `checked`, `selected`, `focused`, and `filled` | `empty` for
+    text fields;
+  - `text`: visible text;
+  - `system`: system dialogs.
+- **Not observed.** Resource ids and activity names are never part of observations.
+- **The soft keyboard** can take the first Back. If Back matters in a flow, observe what it does both with and
+  without the keyboard open.
+- **Coverage inventory:** screens, every field and its validation, every button and toggle, list behavior (caps,
+  removal, ordering), what persists across screens and what resets, and the app's behavior with the network off
+  if it uses the network.
