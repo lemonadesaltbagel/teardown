@@ -12,7 +12,8 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
  && npm install -g --no-fund --no-audit @anthropic-ai/claude-code \
  && npm cache clean --force
-COPY pyproject.toml README.md /opt/teardown/
+COPY pyproject.toml README.md LICENSE NOTICE /opt/teardown/
+COPY docs/observer-playbook.md /opt/teardown/docs/
 COPY src /opt/teardown/src
 RUN pip install --no-cache-dir /opt/teardown
 # Managed settings apply to every Claude Code session in the container and cannot be overridden by the agent.

@@ -70,3 +70,18 @@ def test_no_subcommand_argument_shadows_the_command_name():
     sub = next(a for a in top._actions if isinstance(a, cli.argparse._SubParsersAction))
     for name, parser in sub.choices.items():
         assert all(a.dest != "command" for a in parser._actions), name
+
+
+def test_room_images_copy_every_file_the_package_build_needs():
+    """The rooms pip-install the source: files pyproject.toml force-includes or declares must be in the image."""
+    import re
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    project = tomllib.loads((root / "pyproject.toml").read_text())
+    needed = set(project["project"].get("license-files", []))
+    needed |= set(project["tool"]["hatch"]["build"]["targets"]["wheel"].get("force-include", {}))
+    for dockerfile in ("deploy/Dockerfile", "deploy/Dockerfile.clean"):
+        copied = " ".join(re.findall(r"^COPY (?!--from)(.+)$", (root / dockerfile).read_text(), re.M))
+        assert all(n in copied for n in needed), (dockerfile, sorted(n for n in needed if n not in copied))
