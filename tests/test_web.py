@@ -39,7 +39,8 @@ def test_driver_observes_behavior_tier_only(site):
     d = WebDriver("web:" + site.url("signup_a.html"))
     try:
         obs = d.reset()
-        assert set(obs) == {"path", "aria", "form", "network", "api_shapes", "title", "focus", "current"}
+        assert set(obs) == {"path", "aria", "form", "network", "api_shapes", "title", "focus", "current",
+                            "landmarks"}
         assert "<script" not in json.dumps(obs)
         assert web_aria(obs, {})["headings"] == ["Your email"]
         assert d.step(_act(op="click", role="button", name="Nope")) is None  # absent -> NA
@@ -472,3 +473,62 @@ def test_same_named_controls_null_expectations_purpose_errors_and_data_folding(t
               "tables": {"Boats": {"columns": ["Name"], "rows": [["Otter"], ["Heron"]]}}}
     summary = summarize(symbol)
     assert summary["clickable"] == ["link:Heron", "link:Locks"] and summary["row_links"] == {"Boats": 2}
+
+
+def test_web_aria_v4_landmark_text_tells_inline_from_block_splits(tmp_path):
+    from teardown.engine.abstractions import BUILTINS
+
+    root = tmp_path / "site"
+    root.mkdir()
+    head = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>T</title></head><body>'
+    (root / "inline.html").write_text(head + '<header><p>Signed in as <strong>Otto</strong> (Skipper)</p></header>'
+                                      '<main><section aria-label="Fits"><ul><li>Hollin</li></ul></section></main>'
+                                      '</body></html>')
+    (root / "split.html").write_text(head + '<header><p>Signed in as</p><p>Otto</p><p>(Skipper)</p></header>'
+                                     '<main><section aria-label="Fits"><ul><li>Hollin</li></ul></section></main>'
+                                     '</body></html>')
+    local = LocalSite(root)
+    try:
+        symbols = {}
+        for page in ("inline", "split"):
+            d = WebDriver("web:" + local.url(f"{page}.html"))
+            try:
+                symbols[page] = BUILTINS["web.aria/v4"](d.reset(), {})
+            finally:
+                d.close()
+        assert symbols["inline"]["landmarks"] == {"banner": "Signed in as Otto (Skipper)", "region:Fits": "Hollin"}
+        assert symbols["split"]["landmarks"]["banner"] == "Signed in asOtto(Skipper)"  # conformance now sees it
+        assert "landmarks" not in BUILTINS["web.aria/v3"]({"aria": "", "path": "/", "landmarks": {"banner": "x"}}, {})
+    finally:
+        local.close()
+
+
+def test_release_requires_coverage_gaps_to_be_exercised_explained_or_accepted(site, tmp_path):
+    from teardown.project import CoverageGateBlocked
+
+    project = Project(tmp_path / "p")
+    project.open_target("web:" + site.url("fetcher.html"), purpose="research")
+    project.define_actions({"load": {"op": "click", "role": "button", "name": "Load quotes"}})
+    project.check_rules("quotes", [{"statement": "Loading shows the heading.", "checks": [
+        {"kind": "outcome", "a": {"actions": ["load"]}, "expect": {"headings": ["Quotes"]}}]}], workers=1)
+    project.coverage("quotes", {"export": ["Export quotes"]})  # never exercised
+    draft = project.compile_spec("quotes").id
+    with pytest.raises(ValueError, match="neither exercised nor explained"):
+        project.release_spec(draft)
+    project.release_spec(draft, accept_gaps="the app has no export; documented feature only")
+    for gap in project.ledger.unknowns().values():
+        if gap.status == "open" and gap.identity.question.startswith("not exercised by any probe or rule:"):
+            project.update_unknown(gap.id, "out-of-scope", "not part of this feature")
+    assert project.open_coverage_gaps("quotes") == []
+    project.release_spec(draft)  # every gap explained: no flag needed
+    kinds = [e["statement"]["predicate"] for e in project.audit.entries()
+             if e["statement"]["predicateType"].split("/")[-2] == "spec-release"]
+    assert kinds[0].get("accept_gaps_reason", "").startswith("the app has no export")
+
+    strict = Project(tmp_path / "s")
+    strict.open_target("web:" + site.url("fetcher.html"), purpose="research", strict=True)
+    strict.define_actions({"load": {"op": "click", "role": "button", "name": "Load quotes"}})
+    strict.check_rules("quotes", [{"statement": "Loading shows the heading.", "checks": [
+        {"kind": "outcome", "a": {"actions": ["load"]}, "expect": {"headings": ["Quotes"]}}]}], workers=1)
+    with pytest.raises(CoverageGateBlocked):  # rules-only drafts need measured coverage too
+        strict.release_spec(strict.compile_spec("quotes").id)

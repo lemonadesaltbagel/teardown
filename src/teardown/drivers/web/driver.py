@@ -87,12 +87,44 @@ _STATE_PROBE = """() => {
   const nameOf = el => (el.getAttribute('aria-label') || (el.labels && el.labels[0] && el.labels[0].textContent) ||
                         labelledBy(el) ||
                         (['link', 'button'].includes(roleOf(el)) ? el.textContent : '') ||
-                        el.getAttribute('placeholder') || '').replace(/\s+/g, ' ').trim();
+                        el.getAttribute('placeholder') || '').replace(/\\s+/g, ' ').trim();
   const a = document.activeElement;
   const focus = a && a !== document.body && a !== document.documentElement ? roleOf(a) + ':' + nameOf(a) : null;
   const current = Array.from(document.querySelectorAll('[aria-current]'))
     .filter(el => el.getAttribute('aria-current') !== 'false').map(el => roleOf(el) + ':' + nameOf(el));
   return {focus, current};
+}"""
+
+# Landmarks (banner, navigation, named regions, ...) with their text as Playwright's text assertions read it:
+# textContent with whitespace collapsed. This keeps where inline text joins ("Signed in as Otto") and where a
+# layout splits it into blocks ("Signed in asOtto"), which the accessibility snapshot's line breaks do not show.
+_LANDMARK_PROBE = """() => {
+  const nameOf = el => {
+    const ref = el.getAttribute('aria-labelledby') && document.getElementById(el.getAttribute('aria-labelledby'));
+    return (el.getAttribute('aria-label') || (ref ? ref.textContent : '') || '').replace(/\\s+/g, ' ').trim();
+  };
+  const sectioning = 'article, aside, main, nav, section';
+  const roleOf = el => {
+    const explicit = el.getAttribute('role');
+    if (explicit) return explicit;
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'header') return el.parentElement && el.parentElement.closest(sectioning) ? null : 'banner';
+    if (tag === 'footer') return el.parentElement && el.parentElement.closest(sectioning) ? null : 'contentinfo';
+    return {nav: 'navigation', aside: 'complementary', section: 'region', form: 'form', search: 'search'}[tag] || null;
+  };
+  const out = {};
+  for (const el of document.querySelectorAll('header, footer, nav, aside, section, form, search, [role]')) {
+    const role = roleOf(el);
+    if (!['banner', 'contentinfo', 'navigation', 'complementary', 'region', 'form', 'search'].includes(role)) continue;
+    const name = nameOf(el);
+    if ((role === 'region' || role === 'form') && !name) continue;  // unnamed sections and forms are not landmarks
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') continue;
+    let key = name ? role + ':' + name : role, i = 2;
+    while (key in out) key = (name ? role + ':' + name : role) + ' #' + i++;
+    out[key] = el.textContent.replace(/\\s+/g, ' ').trim();
+  }
+  return out;
 }"""
 
 _SEED_RANDOM = """(() => {
@@ -555,6 +587,7 @@ class WebDriver(Driver):
             **({"contract": self.page.evaluate(_CONTRACT_PROBE, self.contract)} if self.contract else {}),
             "title": self.page.title(),
             **self.page.evaluate(_STATE_PROBE),
+            "landmarks": self.page.evaluate(_LANDMARK_PROBE),
         }
 
     def actions(self) -> list[str]:

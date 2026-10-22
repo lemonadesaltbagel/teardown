@@ -248,6 +248,8 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
         out["network"] = [f"{m} {p} {s}" for m, p, s in observation["network"]]
     if observation.get("contract"):  # public-contract selectors: absent | hidden | empty | content
         out["contract"] = dict(sorted(observation["contract"].items()))
+    if version >= 4 and observation.get("landmarks"):  # landmark text as text assertions read it
+        out["landmarks"] = dict(sorted(observation["landmarks"].items()))
     if version >= 2:  # what the accessibility snapshot leaves out
         if observation.get("title"):
             out["title"] = observation["title"]
@@ -264,6 +266,8 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
             data["rows"] = [[CALENDAR_DATE.sub("<date>", c) for c in row] for row in data["rows"]]
         if "definitions" in out:
             out["definitions"] = [[t, CALENDAR_DATE.sub("<date>", d)] for t, d in out["definitions"]]
+        if "landmarks" in out:
+            out["landmarks"] = {k: CALENDAR_DATE.sub("<date>", v) for k, v in out["landmarks"].items()}
     for key in ("alerts", "text"):
         if not out[key]:
             out.pop(key)
@@ -277,6 +281,9 @@ BUILTINS["web.aria/v2"] = lambda observation, params: web_aria(observation, para
 # v3: structure. Tables become {name: {columns, rows}} (cells no longer in `text`); description lists become
 # `definitions` ([term, definition] pairs). v2 stays as it was for specs released under it.
 BUILTINS["web.aria/v3"] = lambda observation, params: web_aria(observation, params, version=3)
+# v4: `landmarks` — banner, contentinfo, navigation, complementary, search and named regions/forms, each with its
+# text as text assertions read it (whitespace-collapsed textContent: inline joins kept, block splits visible).
+BUILTINS["web.aria/v4"] = lambda observation, params: web_aria(observation, params, version=4)
 
 
 # -- desktop -----------------------------------------------------------------------------------------------------
@@ -372,6 +379,8 @@ KNOWN_KEYS = {
                     "focus", "status", "dialogs", "options"},
     "web.aria/v3": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract", "title",
                     "focus", "status", "dialogs", "options", "tables", "definitions"},
+    "web.aria/v4": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract", "title",
+                    "focus", "status", "dialogs", "options", "tables", "definitions", "landmarks"},
     "desktop.a11y/v1": {"windows", "controls", "text", "items"},
     "android.a11y/v1": {"controls", "text", "system"},
 }

@@ -132,7 +132,7 @@ def default_mapper(target_spec: str, target: str) -> MapperVersion:
     if target_spec.startswith("cli:"):
         return MapperVersion(target=target, builtin="cli.behavior/v1", note="CLI behavior-level abstraction")
     if target_spec.startswith("web:"):
-        return MapperVersion(target=target, builtin="web.aria/v3", note="structured accessibility snapshot")
+        return MapperVersion(target=target, builtin="web.aria/v4", note="structured accessibility snapshot")
     if target_spec.startswith("desktop:"):
         return MapperVersion(target=target, builtin="desktop.a11y/v1", note="structured AT-SPI snapshot")
     if target_spec.startswith("android:"):
@@ -565,29 +565,56 @@ class Project:
                                                           "note": note})
         return gaps
 
-    def release_spec(self, draft_id: str, approved_by: str | None = None) -> SpecRelease:
-        """Release a draft through the gate. In strict mode nothing passed here approves anything: findings and
-        coverage gaps need recorded approvals (``approve_findings`` / ``approve_coverage_gaps``, i.e. `teardown
-        approve` at a terminal). In standard mode ``approved_by`` only names who released."""
+    def open_coverage_gaps(self, feature: str) -> list[str]:
+        """Uncovered items of the last coverage run that nobody has explained: their gap unknown is still open
+        (``update_unknown(id, "out-of-scope" | "resolved", reason)`` explains one)."""
+        report = self.state.coverage.get(feature)
+        if report is None:
+            return []
+        prefix = "not exercised by any probe or rule: "
+        explained = {u.identity.question[len(prefix):] for u in self.ledger.unknowns().values()
+                     if u.identity.feature == feature and u.identity.question.startswith(prefix)
+                     and u.status != "open"}
+        return [g for g in report.get("uncovered", []) if g not in explained]
+
+    def release_spec(self, draft_id: str, approved_by: str | None = None, *,
+                     accept_gaps: str | None = None) -> SpecRelease:
+        """Release a draft through the gate.
+
+        Strict mode: nothing passed here approves anything. Findings and coverage gaps need recorded approvals
+        (``approve_findings`` / ``approve_coverage_gaps``, i.e. `teardown approve` at a terminal), and coverage
+        must have been measured.
+
+        Standard mode: ``approved_by`` only names who released. If coverage was measured and items are still
+        uncovered and unexplained, the release is refused unless ``accept_gaps`` gives the reason to ship them as
+        unknowns (recorded in the audit log). Exercise them (``suggest_probes``) or explain each one instead."""
         draft = self.workspace.get(draft_id, SpecDraft)
         state = self.state
+        open_gaps: list[str] = []
         if state.gate.mode is GateMode.STRICT:
-            if approved_by:
+            if approved_by or accept_gaps:
                 raise ValueError("strict mode: approvals are recorded with `teardown approve` at a terminal, not "
                                  "passed to release_spec")
-            if draft.probes is not None:
-                gaps = self.coverage_gaps(draft.feature)
-                acknowledged = set((state.coverage_approvals.get(draft.feature) or {}).get("gaps", []))
-                open_gaps = [g for g in gaps if g not in acknowledged]
-                if open_gaps:
-                    raise CoverageGateBlocked(draft.feature, open_gaps)
+            gaps = self.coverage_gaps(draft.feature)
+            acknowledged = set((state.coverage_approvals.get(draft.feature) or {}).get("gaps", []))
+            strict_open = [g for g in gaps if g not in acknowledged]
+            if strict_open:
+                raise CoverageGateBlocked(draft.feature, strict_open)
+        else:
+            open_gaps = self.open_coverage_gaps(draft.feature)
+            if open_gaps and not (accept_gaps or "").strip():
+                raise ValueError(
+                    f"{len(open_gaps)} coverage item(s) are neither exercised nor explained, e.g. {open_gaps[:5]}. "
+                    "Exercise them (suggest_probes lists next steps), explain each with update_unknown "
+                    "(out-of-scope + reason), or release with accept_gaps='<why these ship as unknowns>'.")
         rel = release(draft, self.workspace.corpus(), self.state.gate, self.releases_dir, approved_by=approved_by,
                       supplied=self.workspace.supplied())
         self.audit.append(
             "spec-release",
             {"release": rel.id, "draft": draft.id},
             {"mode": rel.mode, "findings": len(rel.report.findings), "approved_by": rel.report.approved_by,
-             "previous": rel.previous},
+             "previous": rel.previous,
+             **({"accepted_gaps": len(open_gaps), "accept_gaps_reason": accept_gaps} if open_gaps else {})},
         )
         return rel
 

@@ -51,6 +51,10 @@ State them in your own words, with checks:
 - **Lists:** adding, removing, caps, ordering, duplicates, totals.
 - **Derived values:** formulas checked at several points, including boundaries and rounding.
 - **Defaults:** what an empty input means.
+- **Keyboard:** the order Tab moves focus through a page (`press` Tab, then check `focus`); what Enter does
+  in a field; whether filters and searches react while you type or only when you submit.
+- **Every route, including the unhappy ones:** a missing record's page, empty results, and pages that a role
+  may not see. Use `goto` with a made-up id.
 
 Prefer `same`/`differs` checks for relations and `outcome` checks with small subsets for facts.
 
@@ -59,7 +63,8 @@ Prefer `same`/`differs` checks for relations and `outcome` checks with small sub
 - `coverage(feature)`, then `suggest_probes(feature)`. Act on each suggestion, or record why not:
   `update_unknown(id, "out-of-scope", reason)` or `record_unknown`.
 - Retract superseded rules (`list_rules`, `retract_rule`).
-- Stop when every uncovered item is either exercised or explained.
+- Stop when every uncovered item is either exercised or explained. `release_spec` refuses while measured items
+  are neither. Use `accept_gaps` only with a real reason; it is recorded.
 
 ## 6. Release
 

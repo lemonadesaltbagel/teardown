@@ -109,7 +109,7 @@ p.api_contract()                                                       # value-f
     "name": ...}` scopes the lookup, and `nth` picks one among several matches.
   - **Outcomes:** a missing element, or one a user could not act on, makes the step `NA`; a disabled one makes
     it `DISABLED`.
-- **A symbol is the structured accessibility view** (`web.aria/v3`, the default for new projects):
+- **A symbol is the structured accessibility view** (`web.aria/v4`, the default for new projects):
   - `path`, `title`, `headings`, `alerts`;
   - `status` (live-region messages such as "Saved.");
   - `text`;
@@ -119,10 +119,13 @@ p.api_contract()                                                       # value-f
     filled/empty);
   - `options` (each combobox's options, the selected one marked);
   - `dialogs`, `focus` (role:name of the focused element), `invalid`;
-  - `network` (API method, path template, status).
+  - `network` (API method, path template, status);
+  - `landmarks`: the banner, footer, navigation, complementary, search, and named regions/forms, each with its
+    text as a text assertion reads it (inline text joins with spaces, blocks do not), so layout that splits or
+    joins text is visible.
 
   Projects keep the version they were created with (`v1`: no title, focus, status or tables; `v2`: table cells
-  flattened into `text`).
+  flattened into `text`; `v3`: no landmarks).
 - Rules on UIs compare **sequences**: `{"actions": [...]}` on each side; restrict `keys` to what the rule is about
   (`controls`, `path`, `alerts`, `network`) so incidental text does not break the relation.
 - Field probes find length limits and classify refusals as client-side (submit disabled / no request) or

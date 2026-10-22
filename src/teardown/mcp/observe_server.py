@@ -292,9 +292,10 @@ def build_observe_server(project: Project) -> MCPServer:
 
     @server.tool(description="Release a draft through the gate. Strict mode: succeeds only once a person has "
                  "approved every finding and acknowledged coverage gaps (`teardown approve`); rewrite prose findings "
-                 "instead of waiting for approval.")
-    def release_spec(draft_id: str) -> dict[str, Any]:
-        rel = project.release_spec(draft_id)
+                 "instead of waiting for approval. Standard mode: refused while measured coverage items are neither "
+                 "exercised nor explained, unless accept_gaps gives the reason they ship as unknowns.")
+    def release_spec(draft_id: str, accept_gaps: str | None = None) -> dict[str, Any]:
+        rel = project.release_spec(draft_id, accept_gaps=accept_gaps)
         return {"release": rel.id, "mode": rel.mode, "findings": len(rel.report.findings)}
 
     @server.tool(description="Standard mode only: allow one literal through the gate, with the reason it is "
