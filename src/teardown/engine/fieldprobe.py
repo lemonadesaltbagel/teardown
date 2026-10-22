@@ -118,6 +118,19 @@ def outcome(symbol: Any, echo: str | None = None, keys: tuple[str, ...] = OUTCOM
     return out
 
 
+def _same_shape(result: dict[str, Any], reference: dict[str, Any]) -> bool:
+    """Web: a value is accepted when the submit ends like the known-good one: the same route template, no alert
+    or invalid field the reference did not have. Text may differ (an accepted value echoes itself: a new title,
+    a computed total)."""
+    from teardown.engine.discovery import route_template
+
+    if route_template(result.get("path") or "") != route_template(reference.get("path") or ""):
+        return False
+    if result.get("alerts") and not reference.get("alerts"):
+        return False
+    return not (result.get("invalid") and not reference.get("invalid"))
+
+
 def judge(reference: dict[str, Any] | None, accept=None):
     """(refused, describe) for one field: accepted means the observer's ``accept`` predicate holds, or else 'same
     outcome as the known-good value'."""
@@ -127,6 +140,8 @@ def judge(reference: dict[str, Any] | None, accept=None):
             return True
         if accept is not None:
             return not accept(result)
+        if reference is not None and "path" in reference:  # web: judge by outcome shape, not exact equality
+            return not _same_shape(result, reference)
         if reference is not None:
             return result != reference
         return bool(result.get("alerts") or result.get("invalid"))

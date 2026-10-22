@@ -397,6 +397,11 @@ class Project:
         self._save(state.model_copy(update={"rules": {**state.rules, feature: new.id}}))
         self.audit.append("rule-retracted", {"rules": new.id}, {"feature": feature, "rule": rule_id,
                                                                 "reason": reason})
+        gone = next(r for r in table.rules if r.id == rule_id)
+        for u in self.ledger.unknowns().values():  # a conflict raised by the retracted rule no longer stands
+            if (u.identity.feature == feature and u.status == "open"
+                    and u.identity.question.startswith(f"documentation/behavior conflict: '{gone.statement}'")):
+                self.update_unknown(u.id, "resolved", f"rule retracted: {reason}")
         return len(kept)
 
     def update_unknown(self, unknown_id: str, status: str, note: str = "") -> dict[str, Any]:
@@ -975,6 +980,21 @@ class Project:
         from teardown.engine.probing import run_probes
 
         specs = [R.RuleSpec.model_validate({"feature": feature, **r}) for r in rules]
+        known_actions = self.action_table()
+        problems = []
+        for spec in specs:
+            for i, check in enumerate(spec.checks):
+                for side_name, side in (("a", check.a), ("b", check.b)):
+                    if side is None or "actions" not in side:
+                        continue
+                    if not side["actions"]:
+                        problems.append(f"{spec.statement[:50]!r} check {i} side {side_name}: empty action list")
+                    unknown = [n for n in side["actions"] if n not in known_actions]
+                    if unknown:  # an undefined action would just be unavailable (NA) and the check vacuous
+                        problems.append(f"{spec.statement[:50]!r} check {i} side {side_name}: undefined actions "
+                                        f"{unknown}")
+        if problems:
+            raise ValueError("rule checks must run defined actions: " + "; ".join(problems[:8]))
         workers = self.max_workers(workers)
         invocations: dict[str, dict[str, Any]] = {}
         sequences: dict[str, list[str]] = {}

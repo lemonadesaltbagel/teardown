@@ -84,7 +84,13 @@ def guess_kind(name: str) -> str:
 SAMPLE = {"email": "jane.doe@example.com", "password": "Correct7horse!", "number": "12", "text": "sample"}
 
 
-def fill_action(platform: str, role: str, name: str) -> tuple[str, dict[str, Any]]:
+def fill_action(platform: str, role: str, name: str, options: list[str] | None = None) -> tuple[str, dict[str, Any]]:
+    """A plausible input for a field. Web comboboxes (``<select>``) get a select of an observed option: the first
+    one that is not already selected (placeholders such as "Choose ..." are usually the selected default)."""
+    if platform == "web" and role == "combobox" and options:
+        choices = [o for o in options if not o.endswith(" [selected]")] or options
+        label = choices[0].removesuffix(" [selected]")
+        return f"select[{name}]={label}", {"op": "select", "role": role, "name": name, "value": label}
     value = SAMPLE[guess_kind(name)]
     if platform == "web":
         return f"fill[{name}]=sample", {"op": "fill", "role": role, "name": name, "value": value}
@@ -99,7 +105,9 @@ def click_action(platform: str, role: str, name: str) -> tuple[str, dict[str, An
 
 def summarize(symbol: Any) -> dict[str, Any]:
     controls = _controls(symbol)
+    options = symbol.get("options", {}) if isinstance(symbol, dict) else {}
     return {
+        "options": {k: v for k, v in options.items()},
         "path": symbol.get("path") if isinstance(symbol, dict) else None,
         "headings": (symbol.get("headings") or [])[:4] if isinstance(symbol, dict) else [],
         "clickable": sorted(k for k, flags in controls.items()
@@ -144,7 +152,9 @@ def crawl(open_session: Callable[[], Any], platform: str, *, start: list[tuple[s
                 continue
             here = path
             if fill and screens[key]["fields"]:  # get past the form: fill every field, then try the controls
-                here = [*path, *(fill_action(platform, *split_control(f)) for f in screens[key]["fields"])]
+                opts = screens[key].get("options", {})
+                here = [*path, *(fill_action(platform, *split_control(f), opts.get(f))
+                                 for f in screens[key]["fields"])]
                 filled = replay(here)
                 if isinstance(filled, dict):  # controls that a filled form enables
                     enabled = summarize(filled)["clickable"]
@@ -177,7 +187,7 @@ def crawl(open_session: Callable[[], Any], platform: str, *, start: list[tuple[s
                if split_control(c)[0] in CLICKABLE
                for name, spec in [click_action(platform, *split_control(c))]}
     actions.update({name: spec for s in screens.values() for f in s["fields"]
-                    for name, spec in [fill_action(platform, *split_control(f))]})
+                    for name, spec in [fill_action(platform, *split_control(f), s.get("options", {}).get(f))]})
     return {"screens": screens, "transitions": transitions, "episodes": episodes, "truncated": truncated,
             "actions": actions}
 

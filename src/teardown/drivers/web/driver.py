@@ -37,7 +37,8 @@ class WebAction(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    op: Literal["click", "fill", "check", "uncheck", "select", "press", "goto", "fault"]
+    op: Literal["click", "fill", "check", "uncheck", "select", "press", "goto", "fault", "back", "forward",
+                "reload"]
     role: str | None = None
     name: str | None = None
     name_regex: bool = False
@@ -386,7 +387,8 @@ class WebDriver(Driver):
             return None
         if outcome == "disabled":
             return "DISABLED"
-        if spec.op in ("click", "press", "select", "check", "uncheck", "goto") and self.profile.settle == "network":
+        if spec.op in ("click", "press", "select", "check", "uncheck", "goto", "back", "forward", "reload") and (
+                self.profile.settle == "network"):
             # Requests triggered by an event handler start asynchronously; give them a moment to appear before
             # deciding that nothing needs to settle.
             self.page.wait_for_timeout(self.profile.post_action_grace_ms)
@@ -400,6 +402,9 @@ class WebDriver(Driver):
         if a.op == "goto":  # relative paths resolve against the target's root, so specs stay portable to clones
             page.goto(urljoin(self.url, a.value or ""), wait_until="load")
             return "ok"
+        if a.op in ("back", "forward", "reload"):  # browser history and reload, as the user does them
+            getattr(page, {"back": "go_back", "forward": "go_forward", "reload": "reload"}[a.op])(wait_until="load")
+            return "ok"
         if a.op == "press" and not a.role:
             page.keyboard.press(a.value or "Enter")
             return "ok"
@@ -411,19 +416,25 @@ class WebDriver(Driver):
         if a.op in ("click", "check", "uncheck") and loc.is_disabled():
             return "disabled"
         # force=True skips Playwright's actionability waits (~30 ms per click); presence and enabled state
-        # were checked above.
-        if a.op == "click":
-            loc.click(force=True)
-        elif a.op == "fill":
-            loc.fill(a.value or "", force=True)
-        elif a.op == "check":
-            loc.check(force=True)
-        elif a.op == "uncheck":
-            loc.uncheck(force=True)
-        elif a.op == "select":
-            loc.select_option(a.value)
-        elif a.op == "press":
-            loc.press(a.value or "Enter")
+        # were checked above. An element a user could not act on either (off-screen skip links, a fill on a
+        # <select>) makes the step unavailable, as a missing element does, instead of failing the episode.
+        from playwright.sync_api import Error as PlaywrightError
+
+        try:
+            if a.op == "click":
+                loc.click(force=True)
+            elif a.op == "fill":
+                loc.fill(a.value or "", force=True)
+            elif a.op == "check":
+                loc.check(force=True)
+            elif a.op == "uncheck":
+                loc.uncheck(force=True)
+            elif a.op == "select":
+                loc.select_option(a.value)
+            elif a.op == "press":
+                loc.press(a.value or "Enter")
+        except PlaywrightError:
+            return "absent"
         return "ok"
 
     def _settle(self) -> None:

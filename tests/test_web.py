@@ -392,3 +392,30 @@ def test_web_aria_v2_observes_title_focus_status_dialogs_options_and_current(tmp
     finally:
         d.close()
         site.close()
+
+
+def test_history_ops_unclickable_elements_and_undefined_rule_actions(site, tmp_path):
+    root = tmp_path / "site"
+    root.mkdir()
+    (root / "a.html").write_text('<!doctype html><html lang="en"><head><meta charset="utf-8"><title>A</title></head>'
+                                 '<body><a href="#main" style="position:absolute;left:-9999px">Skip to content</a>'
+                                 '<main id="main"><h1>Page A</h1><a href="b.html">Go to B</a></main></body></html>')
+    (root / "b.html").write_text('<!doctype html><html lang="en"><head><meta charset="utf-8"><title>B</title></head>'
+                                 '<body><main><h1>Page B</h1></main></body></html>')
+    local = LocalSite(root)
+    try:
+        project = Project(tmp_path / "p")
+        project.open_target("web:" + local.url("a.html"), purpose="research")
+        project.define_actions({"to_b": {"op": "click", "role": "link", "name": "Go to B"},
+                                "back": {"op": "back"}, "reload": {"op": "reload"},
+                                "skip": {"op": "click", "role": "link", "name": "Skip to content"}})
+        outputs = project.session().run(["to_b", "back", "reload", "skip"], use_cache=False)[0]
+        assert [json.loads(o)["headings"] if o != "NA" else "NA" for o in outputs] == [
+            ["Page B"], ["Page A"], ["Page A"], "NA"]  # the off-screen skip link is unavailable, not a crash
+        with pytest.raises(ValueError, match="undefined actions"):
+            project.check_rules("nav", [{"statement": "x", "checks": [
+                {"kind": "outcome", "a": {"actions": ["to_c"]}, "expect": {"headings": ["Page C"]}}]}], workers=1)
+        found = project.discover_ui("nav", max_states=5, max_depth=2)  # the skip link no longer stops the crawl
+        assert len(found["screens"]) >= 2
+    finally:
+        local.close()
