@@ -122,7 +122,7 @@ def _subset(want: dict, got: dict) -> bool:
     empty collections)."""
     for k, v in want.items():
         if k not in got:
-            if v != []:
+            if v != [] and v is not None:  # abstractions omit empty collections and absent values
                 return False
         elif isinstance(v, dict) and isinstance(got[k], dict):
             if not _subset(v, got[k]):

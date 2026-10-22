@@ -42,7 +42,12 @@ class WebAction(BaseModel):
     role: str | None = None
     name: str | None = None
     name_regex: bool = False
-    value: str | None = None
+    value: str | None = Field(default=None, description="fill/select: the value; goto: the root-relative URL; "
+                              "press: the key")
+    nth: int | None = Field(default=None, description="when several elements share the role and name: which one "
+                            "(0-based, document order); default the first")
+    within: dict[str, str] | None = Field(default=None, description="scope the lookup to a container by role and "
+                                          "name, e.g. {'role': 'dialog', 'name': 'Delete boat?'}")
     fault: dict[str, Any] | None = Field(
         default=None, description="op=fault: {path: glob on the API path ('*' within a segment, '**' across), "
                                   "mode: status|abort|timeout|malformed|hang, "
@@ -409,10 +414,16 @@ class WebDriver(Driver):
             page.keyboard.press(a.value or "Enter")
             return "ok"
         name = re.compile(a.name, re.I) if (a.name and a.name_regex) else a.name
-        loc = page.get_by_role(a.role, name=name, exact=not a.name_regex) if name else page.get_by_role(a.role)
-        if loc.count() == 0:
+        scope = page
+        if a.within:
+            scope = page.get_by_role(a.within["role"], name=a.within.get("name"), exact=True)
+            if scope.count() == 0:
+                return "absent"
+            scope = scope.first
+        loc = scope.get_by_role(a.role, name=name, exact=not a.name_regex) if name else scope.get_by_role(a.role)
+        if loc.count() <= (a.nth or 0):
             return "absent"
-        loc = loc.first
+        loc = loc.nth(a.nth) if a.nth is not None else loc.first
         if a.op in ("click", "check", "uncheck") and loc.is_disabled():
             return "disabled"
         # force=True skips Playwright's actionability waits (~30 ms per click); presence and enabled state

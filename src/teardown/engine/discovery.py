@@ -103,15 +103,32 @@ def click_action(platform: str, role: str, name: str) -> tuple[str, dict[str, An
     return f"click[{role}:{name}]", {"action": "click", "role": role, "name": name}
 
 
+def _row_links(symbol: Any) -> dict[str, list[str]]:
+    """Links whose names are table cell values: records, not features (web.aria/v3 tables)."""
+    tables = symbol.get("tables", {}) if isinstance(symbol, dict) else {}
+    controls = _controls(symbol)
+    out: dict[str, list[str]] = {}
+    for name, data in tables.items():
+        cells = {c for row in data.get("rows", []) for c in row}
+        links = sorted(k for k in controls if k.startswith("link:") and split_control(k)[1] in cells)
+        if links:
+            out[name] = links
+    return out
+
+
 def summarize(symbol: Any) -> dict[str, Any]:
     controls = _controls(symbol)
     options = symbol.get("options", {}) if isinstance(symbol, dict) else {}
+    rows = _row_links(symbol)
+    data_links = {k for links in rows.values() for k in links[1:]}  # keep one representative per table
     return {
         "options": {k: v for k, v in options.items()},
+        "row_links": {t: len(v) for t, v in rows.items()},
         "path": symbol.get("path") if isinstance(symbol, dict) else None,
         "headings": (symbol.get("headings") or [])[:4] if isinstance(symbol, dict) else [],
         "clickable": sorted(k for k, flags in controls.items()
-                            if split_control(k)[0] in CLICKABLE and "disabled" not in flags and split_control(k)[1]),
+                            if split_control(k)[0] in CLICKABLE and "disabled" not in flags and split_control(k)[1]
+                            and k not in data_links),
         "disabled": sorted(k for k, flags in controls.items() if "disabled" in flags),
         "fields": sorted(k for k in controls if split_control(k)[0] in FIELDS),
     }

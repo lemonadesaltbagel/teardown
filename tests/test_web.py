@@ -433,3 +433,42 @@ def test_web_aria_v3_keeps_table_structure_and_description_lists():
     assert v3["tables"] == {"Pieces": {"columns": ["Title", "Units"], "rows": [["Moon jar", "4"]]}}
     assert v3["definitions"] == [["Cone", "10"]] and "link:Moon jar" in v3["controls"]
     assert "tables" not in BUILTINS["web.aria/v2"]({"aria": snap, "path": "/"}, {})  # v2 unchanged
+
+
+def test_same_named_controls_null_expectations_purpose_errors_and_data_folding(tmp_path):
+    import json as _json
+
+    from teardown.engine.discovery import summarize
+    from teardown.engine.mapper import symbol_matches
+    from teardown.project import _contract_path
+
+    root = tmp_path / "site"
+    root.mkdir()
+    (root / "p.html").write_text(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>P</title></head><body><main>'
+        '<button onclick="document.getElementById(\'d\').showModal()">Delete</button>'
+        '<dialog id="d" aria-label="Delete boat?"><button onclick="document.body.dataset.x=1;'
+        'document.querySelector(\'h1\').textContent=\'Deleted\';this.closest(\'dialog\').close()">Delete</button>'
+        '</dialog><h1>Boat</h1></main></body></html>')
+    local = LocalSite(root)
+    try:
+        project = Project(tmp_path / "p")
+        with pytest.raises(ValueError, match="purpose must be one of"):
+            project.open_target("web:" + local.url("p.html"), purpose="a long sentence")
+        project.open_target("web:" + local.url("p.html"), purpose="research")
+        project.define_actions({"open": {"op": "click", "role": "button", "name": "Delete"},
+                                "confirm": {"op": "click", "role": "button", "name": "Delete",
+                                            "within": {"role": "dialog", "name": "Delete boat?"}},
+                                "second": {"op": "click", "role": "button", "name": "Delete", "nth": 5}})
+        outputs = project.session().run(["open", "confirm"], use_cache=False)[0]
+        assert _json.loads(outputs[-1])["headings"] == ["Deleted"]
+        assert project.session().run(["second"], use_cache=False)[0] == ["NA"]  # no sixth match
+    finally:
+        local.close()
+    assert symbol_matches(_json.dumps({"text": ["x"]}), _json.dumps({"focus": None}), "subset")
+    assert _contract_path("/api/locks/lock-3/passages/b7", []) == "/api/locks/{id}/passages/{id}"
+    assert _contract_path("/api/locks", []) == "/api/locks"
+    symbol = {"controls": {"link:Otter": [], "link:Heron": [], "link:Locks": []},
+              "tables": {"Boats": {"columns": ["Name"], "rows": [["Otter"], ["Heron"]]}}}
+    summary = summarize(symbol)
+    assert summary["clickable"] == ["link:Heron", "link:Locks"] and summary["row_links"] == {"Boats": 2}

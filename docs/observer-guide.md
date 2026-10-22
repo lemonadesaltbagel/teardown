@@ -102,8 +102,13 @@ p.learn("signup", alphabet=[...], walks_per_state=100, walk_len=20)   # state ma
 p.api_contract()                                                       # value-free backend contract (in the spec)
 ```
 
-- Actions address elements by **ARIA role and accessible name** only; values are what you type. A missing element
-  makes the step `NA`; a disabled one `DISABLED`.
+- Actions address elements by **ARIA role and accessible name** only.
+  - **Fields:** `op` is one of click, fill, check, uncheck, select, press, goto, back, forward, reload, fault.
+    `value` holds the typed text, the selected option, the key, or (for `goto`) the root-relative URL.
+  - **Same-named controls** (a page button and a dialog's confirm button): `within: {"role": "dialog",
+    "name": ...}` scopes the lookup, and `nth` picks one among several matches.
+  - **Outcomes:** a missing element, or one a user could not act on, makes the step `NA`; a disabled one makes
+    it `DISABLED`.
 - **A symbol is the structured accessibility view** (`web.aria/v3`, the default for new projects):
   - `path`, `title`, `headings`, `alerts`;
   - `status` (live-region messages such as "Saved.");

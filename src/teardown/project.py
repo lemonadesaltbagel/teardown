@@ -152,6 +152,8 @@ def _contract_path(path: str, templates: list[str]) -> str:
                                                for p, s in zip(parts, segments, strict=True)):
             base = "/" + "/".join(parts)
             break
+    else:  # no declared template: segments carrying digits are record ids (b7, lock-3, 2026-q1)
+        base = "/" + "/".join("{id}" if any(c.isdigit() for c in s) and s != "{id}" else s for s in segments)
     if query:
         keys = sorted({kv.partition("=")[0] for kv in query.split("&") if kv})
         base += "?" + "&".join(f"{k}={{}}" for k in keys)
@@ -223,10 +225,15 @@ class Project:
     ) -> tuple[Intake, list[str]]:
         driver = open_driver(target_spec, None, target_options)
         target = driver.target_fingerprint()
+        try:
+            purpose = Purpose(purpose)
+        except ValueError:
+            driver.close()
+            raise ValueError(f"purpose must be one of {[p.value for p in Purpose]} (got {purpose!r})") from None
         intake = Intake(
             target=target,
             target_spec=target_spec,
-            purpose=Purpose(purpose),
+            purpose=purpose,
             jurisdiction=jurisdiction,
             account=account,
             terms_sha256=terms_digest(terms_text),
