@@ -32,6 +32,9 @@
   (`research/15`).
 - Second held-out web result, Kilnshare: 73/131 with `v2`. No misses in what `v2` added; 54 were table
   structure, which `v3` records (`research/16`).
+- Third held-out web result, Lockline: 106/130 with `v3` (`research/17`).
+- Table-row links count as one representative per table in discovery and coverage. API paths fold id
+  segments. `within`/`nth` handle same-named controls.
 - Discovery no longer fails on off-screen controls or selects; `back`/`forward`/`reload` actions; rule checks
   reject undefined actions.
 

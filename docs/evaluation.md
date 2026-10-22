@@ -48,6 +48,7 @@ and what it does not.
 | RealWorld Conduit, rounds 1–4 | web, famous | spec + public selectors contract | 80 → 93 → 95 → 99 of 101 | 342 → 576 passing | development-set: tooling tuned between rounds; implementer recognized the app (`research/12`) |
 | Kilnroll (novel web app), **held out** | web, private | spec only, both sides confined, tooling frozen | 64/120 (53%) | 224 / 0 / 0 | misses were behaviors `web.aria/v1` did not record (tables, flash messages, focus, titles); fixed in `v2` afterwards (`research/15`) |
 | Kilnshare (novel web app), **held out** | web, private | spec only, both sides confined, tooling frozen (`web.aria/v2`) | 73/131 (56%) | 197 / 0 / 0 | no misses in what v2 added; 54 were table structure, fixed in `v3` afterwards (`research/16`) |
+| Lockline (novel web app), **held out** | web, private | spec only, both sides confined, tooling frozen (`web.aria/v3`), neutral brief | 106/130 (81.5%) | 116 / 0 / 1 | thinnest spec (38/153 coverage); misses split between unvisited pages and lossy regions/inline text (`research/17`) |
 | Wickwright (novel Android app) | Android, private | spec only, both sides confined | 113/118 (95.8%) | 163 / 0 / 0 | first and only round; implementer did not recognize the app (`research/14`) |
 | Conduit (round-4 release) and the round-2 novel tool, in the enforced clean room | web / CLI | as above | 99/101 · 397/397 | 570 / 0 / 6 · 1144 / 0 / 1 | implementer inside the isolated container; same outcomes as with a prompt-only barrier (`research/13`) |
 
@@ -58,9 +59,10 @@ What these numbers support:
 - **Web:**
   - On Conduit (development set), the tooling grew to capture what a real app's E2E suite checks: routing,
     error handling under faults, empty structure named by a public contract, environment-dependent layout.
-  - **On held-out apps it scored 53% (v1) and 56% (v2).** Both clones reproduced their specs exactly; what
-    failed was user-visible structure the abstraction did not record yet (round 1: titles, focus, messages;
-    round 2: tables, description lists). `web.aria/v3` records both; a third held-out app will measure it.
+  - **On held-out apps it scored 53% (v1), 56% (v2) and 81.5% (v3).** Each clone reproduced its spec; each
+    round found the next layer of user-visible structure the abstraction lacked (titles, focus, messages;
+    then tables and description lists; now regions and inline text runs). The rest are pages the observer
+    did not visit.
 - **Enforced isolation costs nothing in outcome:** the same releases reimplemented inside the clean-room
   container scored the same as with a prompt-only barrier.
 - **Android:** a spec released by a confined observer through MCP alone rebuilt a novel three-screen app to 95.8%
