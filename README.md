@@ -54,7 +54,7 @@ through the gate and is recorded in a signed, hash-chained audit log.
 ### Install
 
 ```bash
-git clone <this repository> teardown && cd teardown
+git clone https://github.com/lemonadesaltbagel/teardown.git && cd teardown
 uv sync                                    # Python 3.12+
 uv run playwright install chromium         # web targets
 uv run teardown demo                       # observe -> gate -> clean -> verdict on a built-in example
