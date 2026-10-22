@@ -29,6 +29,7 @@ services:
       https_proxy: http://egress:3128
       NO_PROXY: ""
       NODE_USE_ENV_PROXY: "1"
+      MCP_TOOL_TIMEOUT: "3600000"  # observe tools run whole probe batches; calls are serialized on the server
       TEARDOWN_OBSERVE_URL: ${OBSERVE_URL:?set OBSERVE_URL}
       TEARDOWN_OBSERVE_TOKEN: ${OBSERVE_TOKEN:?set OBSERVE_TOKEN}
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}

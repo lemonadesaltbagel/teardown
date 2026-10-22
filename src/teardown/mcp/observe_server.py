@@ -27,17 +27,22 @@ UNTRUSTED = {"untrusted_content": True, "source": "analysis_target"}
 
 def _explaining(tool_decorator):
     """Wrap ``server.tool``: anticipated failures (bad arguments, unknown names, refusals) reach the observer with
-    their message instead of a bare "Error executing tool"."""
+    their message instead of a bare "Error executing tool"; calls run one at a time (one target, one project
+    state: a call that outlives its client's timeout must not interleave with the next one)."""
     import functools
+    import threading
 
     from pydantic import ValidationError
+
+    lock = threading.Lock()
 
     def register(*args, **kwargs):
         def wrap(fn):
             @functools.wraps(fn)
             def call(*a, **k):
                 try:
-                    return fn(*a, **k)
+                    with lock:
+                        return fn(*a, **k)
                 except (ValueError, KeyError, TypeError, PermissionError, FileNotFoundError, ValidationError) as exc:
                     raise ToolError(f"{type(exc).__name__}: {exc}") from exc
 
@@ -92,14 +97,16 @@ def build_observe_server(project: Project) -> MCPServer:
         return {"mapper": version.id, "parent": version.parent, "params": version.params}
 
     @server.tool(description="Reset the target, apply the inputs, and return raw observations and symbols.")
-    def run_sequence(inputs: list[str]) -> dict[str, Any]:
+    def run_sequence(inputs: list[str], symbols_only: bool = False) -> dict[str, Any]:
         session = project.session()
         _, initial = session.reset()
         steps = []
         for name in inputs:
             ev, symbol = session.step(name)
-            steps.append({"input": name, "symbol": symbol, "evidence": ev,
-                          "observation": project.workspace.get(ev, Evidence).payload})
+            step = {"input": name, "symbol": symbol, "evidence": ev}
+            if not symbols_only:  # raw observations can be large (full accessibility trees)
+                step["observation"] = project.workspace.get(ev, Evidence).payload
+            steps.append(step)
         session.close_trace()
         return {"initial": initial, "steps": steps, "provenance": UNTRUSTED}
 
@@ -181,6 +188,24 @@ def build_observe_server(project: Project) -> MCPServer:
     def list_claims(feature: str | None = None) -> list[dict[str, Any]]:
         return [c.model_dump(mode="json") for c in project.ledger.all().values()
                 if feature is None or c.identity.feature == feature]
+
+    @server.tool(description="List the rules recorded for a feature: id, statement, status, failed checks.")
+    def list_rules(feature: str) -> list[dict[str, Any]]:
+        from teardown.engine.rules import RuleTable
+
+        state = project.state
+        if feature not in state.rules:
+            return []
+        table = project.workspace.get(state.rules[feature], RuleTable)
+        return [{"id": r.id, "statement": r.statement, "status": r.status, "kind": r.kind,
+                 "failed_checks": [i for i, c in enumerate(r.checks) if not c.holds]} for r in table.rules]
+
+    @server.tool(description="List unknowns (yours and the ones coverage generated) with id, question and status, "
+                 "so they can be answered with update_unknown.")
+    def list_feature_unknowns(feature: str | None = None) -> list[dict[str, Any]]:
+        return [{"id": u.id, "feature": u.identity.feature, "question": u.identity.question, "status": u.status,
+                 "note": u.note} for u in project.ledger.unknowns().values()
+                if feature is None or u.identity.feature == feature]
 
     @server.tool(description="Record something that could not be observed (missing coverage is unknown, not absence).")
     def record_unknown(feature: str, question: str, recommended_probes: list[str] | None = None) -> dict[str, Any]:
