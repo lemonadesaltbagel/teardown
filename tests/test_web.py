@@ -419,3 +419,17 @@ def test_history_ops_unclickable_elements_and_undefined_rule_actions(site, tmp_p
         assert len(found["screens"]) >= 2
     finally:
         local.close()
+
+
+def test_web_aria_v3_keeps_table_structure_and_description_lists():
+    from teardown.engine.abstractions import BUILTINS
+
+    snap = "\n".join([
+        '- table "Pieces":', "  - rowgroup:", '    - row "Title Units":', '      - columnheader "Title"',
+        '      - columnheader "Units"', "  - rowgroup:", '    - row "Moon jar 4":', '      - cell "Moon jar":',
+        '        - link "Moon jar":', "          - /url: /p/2", '      - cell "4"', "- term: Cone",
+        '- definition: "10"'])
+    v3 = BUILTINS["web.aria/v3"]({"aria": snap, "path": "/"}, {})
+    assert v3["tables"] == {"Pieces": {"columns": ["Title", "Units"], "rows": [["Moon jar", "4"]]}}
+    assert v3["definitions"] == [["Cone", "10"]] and "link:Moon jar" in v3["controls"]
+    assert "tables" not in BUILTINS["web.aria/v2"]({"aria": snap, "path": "/"}, {})  # v2 unchanged

@@ -38,7 +38,7 @@ WEB_TESTABILITY_CONTRACT = (
 
 def contract_for(abstraction: dict[str, Any], has_probes: bool) -> str:
     builtin = (abstraction or {}).get("builtin")
-    if builtin in ("web.aria/v1", "web.aria/v2"):
+    if (builtin or "").startswith("web.aria/"):
         return WEB_TESTABILITY_CONTRACT
     if builtin == "cli.behavior/v1":
         return CLI_TESTABILITY_CONTRACT

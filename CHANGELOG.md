@@ -13,7 +13,9 @@
 
 ### Web observation
 
-- `web.aria/v2`, the default for new web projects. It adds page title, focus, status messages, dialogs, select
+- `web.aria/v3`, the default for new web projects: `tables` (name, columns, rows) and `definitions`
+  (description lists).
+- `web.aria/v2`. It adds page title, focus, status messages, dialogs, select
   options, `aria-current`, and table cells, and undoes Playwright's YAML quoting for names with `#` or `:`.
   `web.aria/v1` is unchanged, so existing specs keep verifying.
 
@@ -28,6 +30,10 @@
 
 - First held-out web result, Kilnroll: 64/120 with the frozen tooling. The misses are what `v2` now records
   (`research/15`).
+- Second held-out web result, Kilnshare: 73/131 with `v2`. No misses in what `v2` added; 54 were table
+  structure, which `v3` records (`research/16`).
+- Discovery no longer fails on off-screen controls or selects; `back`/`forward`/`reload` actions; rule checks
+  reject undefined actions.
 
 ## 0.1.0 (2026-10-22)
 

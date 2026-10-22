@@ -129,7 +129,7 @@ teardown cleanroom down  --project P
 | Target | What Teardown observes | Faults it can inject | Requirements | Status |
 |---|---|---|---|---|
 | Command-line tools | Exit code, stdout, diagnostic presence and errno class, file effects | Closed/full stdio, unreadable files, read-only directories | Docker (isolated runner) or local | **Stable** |
-| Web apps | Route, title, headings, alerts, status messages, visible text and table cells, control states, focus, dialogs, select options, API method/path/status, public-contract selectors | 5xx, network failure, timeout, malformed body, pending requests | Playwright Chromium; optional backend reset command | **Working**: 53% on a held-out app before `web.aria/v2` (see Results) |
+| Web apps | Route, title, headings, alerts, status messages, visible text, tables, description lists, control states, focus, dialogs, select options, API method/path/status, public-contract selectors | 5xx, network failure, timeout, malformed body, pending requests | Playwright Chromium; optional backend reset command | **Working**: 53% and 56% on two held-out apps (see Results) |
 | Android apps | Controls by role and name with state flags, visible text, system dialogs | Network off (airplane mode) | Android SDK, emulator or device via `adb` | **Working** |
 | Linux desktop apps | AT-SPI tree: windows, controls, text, list items | — | Docker (Xvfb + AT-SPI container) | Experimental |
 | macOS, Windows, iOS | — | — | — | Not started |
@@ -157,13 +157,17 @@ benchmark with 118 hidden scenarios. A confined observer worked through MCP alon
 only the spec. The clone passes 113. The five misses are input-check orders and messages that were never probed.
 [Report](research/14-android-novel-confined.md)
 
-### A web app no model has seen, held out: 64/120
+### Web apps no model has seen, held out: 64/120 and 73/131
 
 Kilnroll, a pottery-studio kiln logbook, was written for the benchmark with 120 hidden Playwright tests. Nothing
 was tuned on it, and the tooling was frozen before the run. The clone matched every observed behavior (224/224
 conformance), but half the hidden tests checked things the web abstraction did not record yet: page titles,
 focus after validation errors, flash messages, table cells. `web.aria/v2` records them; the next held-out app
 will show what that is worth. [Report](research/15-held-out-web-kilnroll.md)
+
+A second held-out app (Kilnshare, 131 hidden tests) scored 73 with `v2`: nothing in what v2 added failed, but
+the suite reaches rows through *tables*, and v2 recorded cells without their table. `web.aria/v3` records
+tables and description lists. [Report](research/16-held-out-web-kilnshare.md)
 
 ### RealWorld "Conduit" web frontend: 99/101
 

@@ -177,11 +177,42 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
                            "controls": {}}
     skip_depth = None
     combobox = None  # v2: options belong to the combobox above them
+    table: dict[str, Any] | None = None  # v3: the table being read, with its depth
+    term: str | None = None  # v3: a term waiting for its definition
     for n in parse_aria(observation["aria"], yaml_strings=version >= 2):
         if skip_depth is not None and n["depth"] > skip_depth:
             continue
         skip_depth = None
         role = n["role"]
+        if version >= 3:  # structure: tables (columns and rows of cells) and description lists
+            if table is not None and n["depth"] <= table["depth"]:
+                table = None
+            if role == "table":
+                name = n["name"] or f"table {len(out.setdefault('tables', {})) + 1}"
+                out.setdefault("tables", {})[name] = {"columns": [], "rows": []}
+                table = {"depth": n["depth"], "data": out["tables"][name]}
+                continue
+            if table is not None:
+                if role == "row":
+                    table["data"]["rows"].append([])
+                    continue
+                if role == "columnheader":
+                    table["data"]["columns"].append((n["name"] or n["text"] or "").strip())
+                    if table["data"]["rows"] and not table["data"]["rows"][-1]:
+                        table["data"]["rows"].pop()  # the header row is not a data row
+                    continue
+                if role in ("cell", "gridcell", "rowheader"):
+                    if not table["data"]["rows"]:
+                        table["data"]["rows"].append([])
+                    table["data"]["rows"][-1].append((n["name"] or n["text"] or "").strip())
+                    continue
+            if role == "term":
+                term = (n["name"] or n["text"] or "").strip()
+                continue
+            if role == "definition":
+                out.setdefault("definitions", []).append([term or "", (n["name"] or n["text"] or "").strip()])
+                term = None
+                continue
         if role in drop_roles:
             skip_depth = n["depth"]
             continue
@@ -203,7 +234,7 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
             out["alerts"].append(n["name"] or n["text"] or "")
         elif role in ("paragraph", "text", "strong", "emphasis", "listitem") and (n["text"] or "").strip():
             out["text"].append(n["text"].strip())
-        elif version >= 2 and role in _TABLE_ROLES and (n["name"] or n["text"] or "").strip():
+        elif version == 2 and role in _TABLE_ROLES and (n["name"] or n["text"] or "").strip():
             out["text"].append((n["name"] or n["text"]).strip())  # table contents are shown values
         elif role in _CONTROL_ROLES:
             flags = sorted(a for a in n["attrs"] if a in ("checked", "disabled", "expanded", "pressed", "selected"))
@@ -229,6 +260,10 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
         for key in ("headings", "alerts", "text", "status"):
             if key in out:
                 out[key] = [CALENDAR_DATE.sub("<date>", t) for t in out[key]]
+        for data in out.get("tables", {}).values():
+            data["rows"] = [[CALENDAR_DATE.sub("<date>", c) for c in row] for row in data["rows"]]
+        if "definitions" in out:
+            out["definitions"] = [[t, CALENDAR_DATE.sub("<date>", d)] for t, d in out["definitions"]]
     for key in ("alerts", "text"):
         if not out[key]:
             out.pop(key)
@@ -239,6 +274,9 @@ BUILTINS["web.aria/v1"] = web_aria
 # v2: Playwright's YAML quoting undone (names with '#', ':' or quotes), table cells and headers in `text`.
 # v1 stays as it was so that specs released under it keep verifying against their recorded symbols.
 BUILTINS["web.aria/v2"] = lambda observation, params: web_aria(observation, params, version=2)
+# v3: structure. Tables become {name: {columns, rows}} (cells no longer in `text`); description lists become
+# `definitions` ([term, definition] pairs). v2 stays as it was for specs released under it.
+BUILTINS["web.aria/v3"] = lambda observation, params: web_aria(observation, params, version=3)
 
 
 # -- desktop -----------------------------------------------------------------------------------------------------
@@ -332,6 +370,8 @@ KNOWN_KEYS = {
     "web.aria/v1": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract"},
     "web.aria/v2": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract", "title",
                     "focus", "status", "dialogs", "options"},
+    "web.aria/v3": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract", "title",
+                    "focus", "status", "dialogs", "options", "tables", "definitions"},
     "desktop.a11y/v1": {"windows", "controls", "text", "items"},
     "android.a11y/v1": {"controls", "text", "system"},
 }
