@@ -18,7 +18,7 @@
 | 1 | **One profile, with user-declared purpose and opt-in strict mode** | See "Policy model" below. |
 | 2 | **Human gate review only in strict mode** | Standard mode: automated gate checks plus an advisory LLM judge, and items are flagged rather than blocked. Strict mode: a human signs every spec release. |
 | 3 | **Clean-side model: recommended, not enforced** | Docs and the intake wizard recommend a different provider and account for the clean implementer. The audit log records which model each role used. |
-| 4 | **Open source** | Core license: **Apache-2.0**. It includes a patent grant and matches the main dependencies (Playwright and LearnLib are Apache, AALpy and uiautomator2 are MIT). If you would rather block hosted competitors, use FSL-1.1-Apache-2.0, which converts to Apache-2.0 after 2 years. **Confirm before the first commit.** |
+| 4 | **Open source** | **Apache License 2.0** (decided by the owner, 2026-10-22; see `LICENSE` and `NOTICE`). It includes a patent grant and matches the main dependencies (Playwright is Apache-2.0; pydantic, the MCP SDK and AALpy are MIT). |
 | 5 | **Build order: CLI → web → barrier → Android → desktop (Linux → macOS → Windows) → iOS** | CLI is the cheapest to reset, has the strongest test oracles, and a spike already works for it. Web is where most of the value is. See `ROADMAP.md`. |
 | 6 | **v1 scope-outs** | Listed under "v1 scope". Each one has a rough backlog task in `ROADMAP.md`. |
 

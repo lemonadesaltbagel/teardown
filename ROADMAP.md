@@ -8,7 +8,7 @@
 
 ## Phase 0: core skeleton (M)
 
-- [x] Repo setup: Python ≥3.12, uv, CI. (License deferred to the end; pre-commit not added.)
+- [x] Repo setup: Python ≥3.12, uv, CI, Apache License 2.0. (Pre-commit not added.)
 - [x] Schemas, content-addressed in the style of REA `ev_<sha256>`: `Evidence` (with `observation_tier`), `Trace`, `MapperVersion`, `Claim`, `Unknown`, `QuoteEntry`, `SpecRelease`, `AbstractVerdict`, `ModelRecord`, `SpecDraft`, `Intake`.
   - [ ] Still to add: `AbstractTrace` and `RefinementEvent` (land with mapper refinement in Phase 1); `Ticket` is plain JSON for now.
 - [x] Trace store and persistent observation tree, used as the query cache for every learner.
@@ -142,7 +142,8 @@ novel tool with an independent observer agent: **spec arm 397/397**, hybrid (spe
 
 - [x] README and docs match the code; evaluation method documented (`docs/evaluation.md`).
 - [x] Fresh clone: `uv sync`, `teardown demo`, test suite pass. CI workflow (lint + tests).
-- [ ] License (owner's decision) and the go-ahead to publish.
+- [x] License: Apache License 2.0 (`LICENSE`, `NOTICE`).
+- [ ] The go-ahead to publish.
 
 ## Phase 4: Android (L)
 

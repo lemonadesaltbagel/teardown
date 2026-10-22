@@ -10,6 +10,7 @@
 [![MCP servers](https://img.shields.io/badge/MCP-observe_%C2%B7_clean-5c4ee5?style=flat-square)](#how-teardown-works)
 [![Targets](https://img.shields.io/badge/targets-CLI_%C2%B7_web_%C2%B7_Android-0f766e?style=flat-square)](#what-you-can-analyze)
 [![Status: pre-release](https://img.shields.io/badge/status-pre--release-f59e0b?style=flat-square)](ROADMAP.md)
+[![Apache-2.0 license](https://img.shields.io/badge/license-Apache--2.0-d22128?style=flat-square)](LICENSE)
 
 [Quick start](#quick-start) · [How Teardown works](#how-teardown-works) · [What you can analyze](#what-you-can-analyze) · [Results](#results) · [FAQ](#faq) · [Documentation](#documentation)
 
@@ -18,8 +19,8 @@
 </div>
 
 > [!IMPORTANT]
-> Teardown is pre-release and its license has not been chosen yet. You declare the purpose of every analysis at
-> intake and own its legal assessment. Read [Responsible use](#responsible-use) first.
+> Teardown is pre-release. You declare the purpose of every analysis at intake and own its legal assessment.
+> Read [Responsible use](#responsible-use) first.
 
 <div align="center">
 
@@ -258,4 +259,8 @@ uv run pytest -q    # Android and desktop tests run when an emulator / the deskt
 
 ## License
 
-Not yet chosen. Until a license is added, no rights are granted beyond viewing the source.
+[Apache License 2.0](LICENSE). See [NOTICE](NOTICE).
+
+The license covers Teardown's own code and documents. Teardown grants no rights in the software you analyze:
+observing a target, and building and distributing anything from what you observed, remain subject to that
+target's terms and the law that applies to you.

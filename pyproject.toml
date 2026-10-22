@@ -3,6 +3,9 @@ name = "teardown"
 version = "0.0.1"
 description = "Clean-room, behavior-first analysis of applications: observe black-box, mine falsifiable behavior claims, release a sanitized spec, and differential-test a clean reimplementation."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Xintian Huang", email = "731913+lemonadesaltbagel@users.noreply.github.com" }]
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.14",
