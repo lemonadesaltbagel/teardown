@@ -40,7 +40,7 @@ NUMBER = {"empty": "", "zero": "0", "one": "1", "negative": "-1", "decimal": "1.
           "text": "abc", "exponent": "1e3", "padded": " 7 "}
 CLASSES = {"text": TEXT, "email": EMAIL, "password": PASSWORD, "number": NUMBER}
 
-OUTCOME_KEYS = ("path", "headings", "alerts", "invalid", "text", "network")
+OUTCOME_KEYS = ("path", "headings", "alerts", "status", "invalid", "text", "network")
 
 
 def layer_of(result: dict[str, Any]) -> str:
@@ -119,15 +119,17 @@ def outcome(symbol: Any, echo: str | None = None, keys: tuple[str, ...] = OUTCOM
 
 
 def _same_shape(result: dict[str, Any], reference: dict[str, Any]) -> bool:
-    """Web: a value is accepted when the submit ends like the known-good one: the same route template, no alert
-    or invalid field the reference did not have. Text may differ (an accepted value echoes itself: a new title,
-    a computed total)."""
+    """Web: a value is accepted when the submit ends like the known-good one: the same route template, the same
+    status message (with the typed value masked), no alert or invalid field the reference did not have. Other
+    text may differ (an accepted value echoes itself: a new title, a computed total)."""
     from teardown.engine.discovery import route_template
 
     if route_template(result.get("path") or "") != route_template(reference.get("path") or ""):
         return False
     if result.get("alerts") and not reference.get("alerts"):
         return False
+    if (result.get("status") or reference.get("status")) and result.get("status") != reference.get("status"):
+        return False  # a different status message ("Saved <input>" vs "Name is too long")
     return not (result.get("invalid") and not reference.get("invalid"))
 
 
@@ -218,11 +220,16 @@ def run_sequences(open_session: Callable[[], ObservationSession], probes: list[S
     return [r for _, r in sorted(results, key=lambda x: x[0])]
 
 
-def accepted(symbol: str, reference: dict[str, Any], accept=None, keys: tuple[str, ...] = OUTCOME_KEYS) -> bool:
-    """A value is accepted when ``accept`` holds for its outcome, or else when the post-submit outcome equals the
-    reference (known-good) outcome."""
-    result = outcome(describe_symbol(symbol), keys=keys)
-    return accept(result) if accept is not None else result == reference
+def accepted(symbol: str, reference: dict[str, Any], accept=None, keys: tuple[str, ...] = OUTCOME_KEYS,
+             echo: str | None = None) -> bool:
+    """A value is accepted when ``accept`` holds for its outcome; else (web) when the submit ends like the
+    known-good one (``_same_shape``); else when the outcomes are equal. The typed value is masked (``echo``)."""
+    result = outcome(describe_symbol(symbol), echo, keys=keys)
+    if accept is not None:
+        return accept(result)
+    if "path" in reference:
+        return _same_shape(result, reference)
+    return result == reference
 
 
 def length_boundary(probe_once: Callable[[str], str], kind: str, reference: dict[str, Any], *,
@@ -232,18 +239,19 @@ def length_boundary(probe_once: Callable[[str], str], kind: str, reference: dict
     import functools
 
     accepted_ = functools.partial(accepted, accept=accept, keys=keys)
-    lo = 1 if kind != "email" else len("a@example.com")
-    if not accepted_(probe_once(value_for_length(kind, lo)), reference):
+    # start where echo masking applies (3+ characters): a shorter typed value shown back would not be masked
+    lo = 3 if kind != "email" else len("a@example.com")
+    if not accepted_(probe_once(v := value_for_length(kind, lo)), reference, echo=v):
         return None
     n = lo
-    while n < hi and accepted_(probe_once(value_for_length(kind, n * 2)), reference):
+    while n < hi and accepted_(probe_once(v := value_for_length(kind, n * 2)), reference, echo=v):
         n *= 2
     if n >= hi:
         return None
     good, bad = n, min(n * 2, hi)
     while bad - good > 1:
         mid = (good + bad) // 2
-        if accepted_(probe_once(value_for_length(kind, mid)), reference):
+        if accepted_(probe_once(v := value_for_length(kind, mid)), reference, echo=v):
             good = mid
         else:
             bad = mid

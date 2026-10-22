@@ -77,10 +77,17 @@ COMPAT_REASONS = ("protocol", "file-format", "public-api", "error-code", "access
                   "user-required")
 
 
-def finding_class(location: str) -> str:
-    """Spec location (``$.rules[3].checks[0].expect``) -> finding class."""
+GENERATED_UNKNOWNS = ("not exercised by any probe or rule:", "value class '", "no length limit observed",
+                      "documentation/behavior conflict:", "Expected UI text contains calendar dates")
+
+
+def finding_class(location: str, text: str = "") -> str:
+    """Spec location (``$.rules[3].checks[0].expect``) -> finding class. Unknowns that Teardown generated
+    (coverage gaps, value classes) quote interface names, not the observer's prose."""
     path = re.sub(r"\[\d+\]", "[]", location)
     head = path.split(".")[1] if path.count(".") else ""
+    if head.removesuffix("[]") == "unknowns" and text.startswith(GENERATED_UNKNOWNS):
+        return "interface"
     head = head.removesuffix("[]")
     if head in ("probe_table", "model", "requirements", "xstate"):
         return "expected-output"
@@ -197,7 +204,7 @@ def review(draft: SpecDraft, corpus: list[str], config: GateConfig,
     found: dict[tuple[str, str], Finding] = {}
 
     def add(finding: Finding) -> None:
-        finding.cls = finding_class(finding.location)
+        finding.cls = finding_class(finding.location, finding.text)
         key = (finding.kind, finding.cls, finding.matched)
         if key in found:
             found[key].occurrences += 1

@@ -532,3 +532,24 @@ def test_release_requires_coverage_gaps_to_be_exercised_explained_or_accepted(si
         {"kind": "outcome", "a": {"actions": ["load"]}, "expect": {"headings": ["Quotes"]}}]}], workers=1)
     with pytest.raises(CoverageGateBlocked):  # rules-only drafts need measured coverage too
         strict.release_spec(strict.compile_spec("quotes").id)
+
+
+def test_field_probe_reads_refusals_shown_only_as_status_messages(tmp_path):
+    root = tmp_path / "site"
+    root.mkdir()
+    (root / "form.html").write_text(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>F</title></head><body><main>'
+        '<label>Variety <input id="v"></label><button id="b">Save</button><p role="status" id="s"></p>'
+        '<script>document.getElementById("b").onclick=()=>{const v=document.getElementById("v").value;'
+        'document.getElementById("s").textContent = v.length > 20 ? "Variety is too long." : "Saved " + v + ".";};'
+        '</script></main></body></html>')
+    local = LocalSite(root)
+    try:
+        project = Project(tmp_path / "p")
+        project.open_target("web:" + local.url("form.html"), purpose="research")
+        project.define_actions({"save": {"op": "click", "role": "button", "name": "Save"}})
+        result = project.probe_web_field("variety", prefix=[], role="textbox", name="Variety", submit="save",
+                                         kind="text", workers=1)
+        assert result["boundary"] == 20
+    finally:
+        local.close()

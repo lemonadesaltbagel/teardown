@@ -1143,7 +1143,8 @@ class Project:
             session = self._worker_session()
             try:
                 ref_inputs = [*prefix, fill_action(valid, values[valid])[0], submit]
-                reference = fp.outcome(describe_symbol(session.run(ref_inputs, use_cache=False)[0][-1]), keys=keys)
+                reference = fp.outcome(describe_symbol(session.run(ref_inputs, use_cache=False)[0][-1]),
+                                       values[valid], keys=keys)
 
                 def probe_once(value: str) -> str:
                     act_name, spec = fill_action("probe", value)
