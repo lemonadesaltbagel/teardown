@@ -40,7 +40,7 @@ def test_driver_observes_behavior_tier_only(site):
     try:
         obs = d.reset()
         assert set(obs) == {"path", "aria", "form", "network", "api_shapes", "title", "focus", "current",
-                            "landmarks", "generated", "descriptions", "flagged", "properties"}
+                            "landmarks", "generated", "descriptions", "flagged", "properties", "focus_named"}
         assert "<script" not in json.dumps(obs)
         assert web_aria(obs, {})["headings"] == ["Your email"]
         assert d.step(_act(op="click", role="button", name="Nope")) is None  # absent -> NA
@@ -745,10 +745,11 @@ def test_web_aria_v7_records_aria_invalid_row_headers_and_named_groups(tmp_path)
 def test_web_aria_v8_records_the_user_facing_playwright_surface(tmp_path):
     from teardown.drivers.web.surface import CASES, SAME, audit
 
-    result = audit(["web.aria/v7", "web.aria/v8"], root=tmp_path / "surface")
-    assert [c.id for c in CASES if not result[c.id]["web.aria/v8"]] == []  # every user-facing difference shows
-    assert [c.id for c in SAME if result[c.id]["web.aria/v8"]] == []  # implementation differences do not
-    assert sum(result[c.id]["web.aria/v7"] for c in CASES) == 17  # v7 unchanged: it records 17 of the 39
+    result = audit(["web.aria/v7", "web.aria/v8", "web.aria/v9"], root=tmp_path / "surface")
+    assert [c.id for c in CASES if not result[c.id]["web.aria/v9"]] == []  # every user-facing difference shows
+    assert [c.id for c in SAME if result[c.id]["web.aria/v9"]] == []  # implementation differences do not
+    assert [c.id for c in CASES if not result[c.id]["web.aria/v8"]] == ["focus-heading"]  # v8 unchanged
+    assert sum(result[c.id]["web.aria/v7"] for c in CASES) == 17  # v7 unchanged: it records 17 of the 40
 
 
 def test_live_outputs_are_discovered_and_need_a_field_probe_without_submit(tmp_path):

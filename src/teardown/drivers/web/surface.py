@@ -111,6 +111,11 @@ CASES: list[Case] = [
     Case("text-inline", 'to_have_text("Signed in as Otto")', "<p>Signed in as <b>Otto</b></p>",
          "<p>Signed in as</p><p>Otto</p>"),
     Case("hidden", "to_be_hidden", '<p>Saved</p><p hidden>Draft</p>', "<p>Saved</p><p>Draft</p>"),
+    Case("focus-heading", 'get_by_role("heading", name="Programme") / to_be_focused',
+         '<h2 tabindex="-1" id="f">Programme</h2><h2 tabindex="-1">Details</h2>'
+         '<script>document.getElementById("f").focus()</script>',
+         '<h2 tabindex="-1">Programme</h2><h2 tabindex="-1" id="f">Details</h2>'
+         '<script>document.getElementById("f").focus()</script>'),
     Case("status", 'get_by_role("status")', '<p role="status">Saved.</p>', "<p>Saved.</p>"),
     Case("alert", 'get_by_role("alert")', '<p role="alert">Failed.</p>', "<p>Failed.</p>"),
 ]

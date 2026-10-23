@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `web.aria/v9`, the default for new web projects: `focus` names what has focus by role and name, headings
+  and landmarks included (`heading:Programme`); `v8` recorded a focused heading as `h2:`. The surface audit
+  adds that case (40 pairs).
+
 ## 0.2.0 (2026-10-23)
 
 Web reimplementation reaches 99.2% and 96.9% of hidden tests on two held-out apps, under the strict gate.

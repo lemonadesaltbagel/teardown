@@ -282,7 +282,10 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
     if version >= 2:  # what the accessibility snapshot leaves out
         if observation.get("title"):
             out["title"] = observation["title"]
-        if observation.get("focus"):
+        if version >= 9 and "focus_named" in observation:  # v9: headings and landmarks named too
+            if observation["focus_named"]:
+                out["focus"] = observation["focus_named"]
+        elif observation.get("focus"):
             out["focus"] = observation["focus"]
         for marked in observation.get("current") or []:
             if marked in out["controls"] and "current" not in out["controls"][marked]:
@@ -342,6 +345,9 @@ BUILTINS["web.aria/v7"] = lambda observation, params: web_aria(observation, para
 # reduces or omits: field values (never a password's), required, readonly, masked, error message, sort state,
 # progress values and title attributes.
 BUILTINS["web.aria/v8"] = lambda observation, params: web_aria(observation, params, version=8)
+# v9: `focus` names whatever has focus by role and name, headings and landmarks included ("heading:Programme");
+# v8 recorded a focused heading as its bare tag ("h2:").
+BUILTINS["web.aria/v9"] = lambda observation, params: web_aria(observation, params, version=9)
 
 
 # -- desktop -----------------------------------------------------------------------------------------------------
@@ -448,6 +454,9 @@ KNOWN_KEYS = {
                     "focus", "status", "dialogs", "options", "tables", "definitions", "landmarks", "generated",
                     "descriptions", "groups", "flagged"},
     "web.aria/v8": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract", "title",
+                    "focus", "status", "dialogs", "options", "tables", "definitions", "landmarks", "generated",
+                    "descriptions", "groups", "flagged", "outline", "properties"},
+    "web.aria/v9": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract", "title",
                     "focus", "status", "dialogs", "options", "tables", "definitions", "landmarks", "generated",
                     "descriptions", "groups", "flagged", "outline", "properties"},
     "desktop.a11y/v1": {"windows", "controls", "text", "items"},

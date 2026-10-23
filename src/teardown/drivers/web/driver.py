@@ -106,7 +106,29 @@ _STATE_PROBE = """() => {
   // fields the app marks invalid (aria-invalid), as distinct from the browser's own constraint validation
   const flagged = Array.from(document.querySelectorAll('[aria-invalid]'))
     .filter(el => !['false', ''].includes(el.getAttribute('aria-invalid'))).map(el => roleOf(el) + ':' + nameOf(el));
-  return {focus, current, descriptions, flagged};
+  // web.aria/v9: focus on any element as role:name, headings and landmarks included (`focus` above names
+  // only controls and is kept as it was for earlier versions)
+  const fullRole = el => {
+    if (el.getAttribute('role')) return el.getAttribute('role');
+    const tag = el.tagName.toLowerCase();
+    if (/^h[1-6]$/.test(tag)) return 'heading';
+    const named = !!(el.getAttribute('aria-label') || el.getAttribute('aria-labelledby'));
+    const landmark = {main: 'main', nav: 'navigation', aside: 'complementary', dialog: 'dialog', table: 'table',
+                      ul: 'list', ol: 'list', li: 'listitem', p: 'paragraph', img: 'img', article: 'article',
+                      section: named ? 'region' : 'generic', form: named ? 'form' : 'generic'}[tag];
+    return landmark || (roleOf(el) === tag ? 'generic' : roleOf(el));
+  };
+  const fullName = el => {
+    const role = fullRole(el);
+    const own = ['link', 'button', 'heading', 'listitem', 'paragraph', 'tab', 'menuitem', 'option', 'cell',
+                 'rowheader', 'columnheader'].includes(role) ? el.textContent : '';
+    return (el.getAttribute('aria-label') || labelledBy(el) || (el.labels && el.labels[0] && el.labels[0].textContent)
+            || own || el.getAttribute('alt') || el.getAttribute('placeholder') || el.getAttribute('title') || '')
+      .replace(/\\s+/g, ' ').trim().slice(0, 80);
+  };
+  const focus_named = a && a !== document.body && a !== document.documentElement
+    ? fullRole(a) + ':' + fullName(a) : null;
+  return {focus, current, descriptions, flagged, focus_named};
 }"""
 
 # Landmarks (banner, navigation, named regions, ...) with their text as Playwright's text assertions read it:

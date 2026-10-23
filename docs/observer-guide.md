@@ -110,7 +110,7 @@ p.api_contract()                                                       # value-f
     "name": ...}` scopes the lookup, and `nth` picks one among several matches.
   - **Outcomes:** a missing element, or one a user could not act on, makes the step `NA`; a disabled one makes
     it `DISABLED`. An outcome check expects these as `{"value": "NA"}` / `{"value": "DISABLED"}`.
-- **A symbol is the structured accessibility view** (`web.aria/v8`, the default for new projects):
+- **A symbol is the structured accessibility view** (`web.aria/v9`, the default for new projects):
   - `path`, `title`, `headings`, `alerts`;
   - `status` (live-region messages such as "Saved.");
   - `text`;
@@ -121,7 +121,8 @@ p.api_contract()                                                       # value-f
   - `groups`: each named group, radiogroup or toolbar with the controls inside it (`group:Net actions` →
     `["link:Edit net", ...]`);
   - `options` (each combobox's options, the selected one marked);
-  - `dialogs`, `focus` (role:name of the focused element), `invalid`;
+  - `dialogs`, `focus` (role:name of the focused element, headings and landmarks included:
+    `heading:Programme`), `invalid`;
   - `network` (API method, path template, status);
   - `landmarks`: the banner, footer, navigation, complementary, search, and named regions/forms, each with its
     text as a text assertion reads it (inline text joins with spaces, blocks do not), so layout that splits or
@@ -137,14 +138,14 @@ p.api_contract()                                                       # value-f
     `required`, `readonly`, `masked` (a password field), `error` (`aria-errormessage`), `sort` (`aria-sort`),
     progress/meter values and `title` attributes.
 
-  `v8` records every difference a user-facing Playwright locator or assertion can see, and none that only the
+  `v9` records every difference a user-facing Playwright locator or assertion can see, and none that only the
   implementation shows (classes, ids, test ids, wrappers, link targets). `teardown.drivers.web.surface` lists
   the cases, and a test keeps them that way. Field values are in `properties`: leave it out of `keys` when a
   `same` check compares runs that type different values.
 
   Projects keep the version they were created with (`v1`: no title, focus, status or tables; `v2`: table cells
   flattened into `text`; `v3`: no landmarks; `v4`: no `generated`; `v5`: dialogs without roles, no
-  `descriptions`; `v6`: no `aria-invalid` flag, row headers or groups; `v7`: no `outline` or `properties`).
+  `descriptions`; `v6`: no `aria-invalid` flag, row headers or groups; `v7`: no `outline` or `properties`; `v8`: a focused heading or landmark recorded by its tag alone, `h2:`).
 - Rules on UIs compare **sequences**: `{"actions": [...]}` on each side; restrict `keys` to what the rule is about
   (`controls`, `path`, `alerts`, `network`) so incidental text does not break the relation.
 - Field probes find length limits, a minimum (`len_at_min`, `len_under_min`) as well as a maximum
