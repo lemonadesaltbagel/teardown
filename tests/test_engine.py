@@ -91,3 +91,22 @@ def test_subset_expectations_are_subsets_at_every_level():
     assert symbol_matches(observed, json.dumps({"alerts": []}), "subset")
     assert symbol_matches(observed, json.dumps({"controls": {"button:Delete": None}}), "subset")  # must be absent
     assert not symbol_matches(observed, json.dumps({"controls": {"button:Go": None}}), "subset")
+    assert not symbol_matches(observed, json.dumps({"controls": {}}), "subset")  # {} means none, not anything
+    assert symbol_matches(json.dumps({"text": ["Hi"]}), json.dumps({"controls": {}}), "subset")
+
+
+def test_server_side_refusals_are_told_apart_from_acceptance():
+    from teardown.engine.fieldprobe import judge, outcome
+
+    good = outcome({"path": "/specimens/SF-1", "status": ["Quarantined."],
+                    "network": ["POST /api/specimens/{id}/quarantine 200"]})
+    refused, _ = judge(good)
+    too_long = {"path": "/specimens/SF-1", "network": ["POST /api/specimens/{id}/quarantine 422"],
+                "dialogs": ["dialog:Quarantine SF-1"], "controls": {"textbox:Reason": ["filled", "invalid"]}}
+    assert outcome(too_long)["flagged"] == ["textbox:Reason"] and outcome(too_long)["dialogs"]
+    assert refused(outcome(too_long))
+    for signal in ({"network": ["POST /api/specimens/{id}/quarantine 422"]},
+                   {"dialogs": ["dialog:Quarantine SF-1"], "status": ["Quarantined."],
+                    "network": ["POST /api/specimens/{id}/quarantine 200"]}):
+        assert refused(outcome({"path": "/specimens/SF-1", **signal}))  # each signal alone is a refusal
+    assert not refused(good)

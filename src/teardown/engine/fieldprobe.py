@@ -102,6 +102,13 @@ def outcome(symbol: Any, echo: str | None = None, keys: tuple[str, ...] = OUTCOM
     if not isinstance(symbol, dict):
         return {"value": symbol}
     out = {k: symbol[k] for k in keys if k in symbol}
+    # server-side refusals often show only as a dialog that stays open or a field marked aria-invalid
+    if symbol.get("dialogs"):
+        out["dialogs"] = symbol["dialogs"]
+    flagged = sorted({*(k for k, f in (symbol.get("controls") or {}).items() if "invalid" in f),
+                      *(symbol.get("flagged") or [])})
+    if flagged:
+        out["flagged"] = flagged
     patterns = _echo_patterns(echo)
     if patterns:
         def mask(x: Any) -> Any:
@@ -130,7 +137,23 @@ def _same_shape(result: dict[str, Any], reference: dict[str, Any]) -> bool:
         return False
     if (result.get("status") or reference.get("status")) and result.get("status") != reference.get("status"):
         return False  # a different status message ("Saved <input>" vs "Name is too long")
-    return not (result.get("invalid") and not reference.get("invalid"))
+    if result.get("invalid") and not reference.get("invalid"):
+        return False
+    if set(result.get("flagged") or []) - set(reference.get("flagged") or []):
+        return False  # a field the app marked aria-invalid
+    if set(result.get("dialogs") or []) - set(reference.get("dialogs") or []):
+        return False  # the dialog stayed open
+    return not (_client_errors(result) - _client_errors(reference))  # an API 4xx the good value did not get
+
+
+def _client_errors(result: dict[str, Any]) -> set[str]:
+    """API calls answered 4xx: 'POST /api/x 422' -> 'POST /api/x'."""
+    out = set()
+    for entry in result.get("network") or []:
+        call, _, status = entry.rpartition(" ")
+        if status.isdigit() and 400 <= int(status) < 500:
+            out.add(call)
+    return out
 
 
 def judge(reference: dict[str, Any] | None, accept=None, *, live: bool = False):

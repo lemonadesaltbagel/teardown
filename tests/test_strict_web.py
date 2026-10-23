@@ -159,6 +159,9 @@ def test_strict_web_loop_one_developer(tmp_path, monkeypatch):
             code, out = _at_terminal("approve", "--project", str(project_dir), "--feature", "quotes", "--by",
                                      "dev@example.com", "--class", cls, "--reason", "test-oracle")
             assert code == 0, out
+        code, out = _at_terminal("approve", "--project", str(project_dir), "--feature", "quotes", "--by",
+                                 "dev@example.com", "--class", "expected-output", "--reason", "test-oracle")
+        assert code == 0 and "already approved by dev@example.com" in out  # a repeat says so, not just "0"
         with pytest.raises(RuntimeError):  # prose still blocks
             observer("release_spec", draft_id=observer("compile_spec", feature="quotes")["draft"])
         code, out = _at_terminal("approve", "--project", str(project_dir), "--feature", "quotes", "--by",

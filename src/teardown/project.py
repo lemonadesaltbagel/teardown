@@ -914,10 +914,19 @@ class Project:
                 if verb in ("click", "fill", "check", "uncheck", "select", "press", "longclick"):
                     touched.append(("fill" if verb in ("fill", "select") else "click", spec.get("role"),
                                     spec.get("name")))
+        # a click whose every recorded outcome is NA (off-screen, hidden) did not exercise the control
+        outcomes: dict[tuple[str | None, str | None], set[bool]] = {}
+        for seq, value in self._observed_sequences(feature, table, raw=True):
+            spec = named.get(seq[-1]) or {}
+            if (spec.get("op") or spec.get("action")) == "click":
+                outcomes.setdefault((spec.get("role"), spec.get("name")), set()).add(value == "NA")
         counts: dict[str, int] = {}
         for screen in found["screens"].values():
             for control in sorted({*screen["clickable"], *screen.get("clickable_when_filled", [])}):
                 role, name = split_control(control)
+                if outcomes.get((role, name)) == {True}:
+                    counts[f"control {control}"] = 0
+                    continue
                 counts[f"control {control}"] = sum(1 for v, r, nm in touched if v == "click" and nm == name and
                                                    r in (role, None))
             for field in screen["fields"]:
@@ -1062,8 +1071,9 @@ class Project:
     FAULT_CLASSES = {"5xx": "a server error", "network": "a network failure or timeout",
                      "malformed": "a malformed body"}
 
-    def _observed_sequences(self, feature: str, table: Any) -> list[tuple[list[str], dict[str, Any]]]:
-        """(action sequence, the symbol recorded after its last step) for probe rows and rule checks."""
+    def _observed_sequences(self, feature: str, table: Any, *, raw: bool = False) -> list[tuple[list[str], Any]]:
+        """(action sequence, the symbol recorded after its last step) for probe rows and rule checks. ``raw`` keeps
+        non-dict outcomes ("NA", "DISABLED")."""
         from teardown.engine.rules import RuleTable
 
         pairs: list[tuple[list[str], str | None]] = [([*r.prefix, r.action], r.expect)
@@ -1075,7 +1085,7 @@ class Project:
         out = []
         for seq, symbol in pairs:
             value = describe_symbol(symbol) if isinstance(symbol, str) else None
-            if seq and isinstance(value, dict):
+            if seq and (isinstance(value, dict) or (raw and value is not None)):
                 out.append((seq, value))
         return out
 
@@ -1121,6 +1131,22 @@ class Project:
 
         specs = [R.RuleSpec.model_validate({"feature": feature, **r}) for r in rules]
         known_actions = self.action_table()
+        # discovery's naming is self-describing: click[role:name] for a record discovery folded into its table's
+        # representative row is defined on first use rather than rejected
+        platform = self.state.target_spec.split(":", 1)[0]
+        if platform in ("web", "android", "desktop"):
+            implied = {}
+            for spec in specs:
+                for check in spec.checks:
+                    for side in (check.a, check.b):
+                        for n in (side or {}).get("actions") or []:
+                            m = re.fullmatch(r"click\[([a-z][a-z ]*):(.+)\]", n) if isinstance(n, str) else None
+                            if m and n not in known_actions:
+                                implied[n] = ({"op": "click", "role": m[1], "name": m[2]} if platform == "web"
+                                              else {"action": "click", "role": m[1], "name": m[2]})
+            if implied:
+                self.define_actions(implied)
+                known_actions = self.action_table()
         problems = []
         for spec in specs:
             for i, check in enumerate(spec.checks):

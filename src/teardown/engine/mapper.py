@@ -120,10 +120,15 @@ def _subset(want: dict, got: dict, top: bool = True) -> bool:
     """Every expected key matches; nested objects (e.g. ``controls``) are subsets too, so an expectation can name
     one control without listing all of them. At the top level an expected empty list or null also matches an
     absent key (abstractions omit empty collections); inside a nested object an expected key must exist (a
-    control expected with no flags, ``"button:Save": []``, is a control that is there)."""
+    control expected with no flags, ``"button:Save": []``, is a control that is there). An expected empty object
+    means none, like an empty list: ``"controls": {}`` holds only when there are no controls."""
     for k, v in want.items():
         if not top and v is None:  # nested null: this key must be absent ("button:Delete": null)
             if k in got:
+                return False
+            continue
+        if v == {}:  # not a vacuous subset: nothing may be there
+            if got.get(k) not in ({}, None) or (not top and k not in got):
                 return False
             continue
         if k not in got:

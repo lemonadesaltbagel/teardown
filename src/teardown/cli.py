@@ -421,9 +421,16 @@ def _approve(args) -> int:
     if args.coverage:
         project.approve_coverage_gaps(feature, args.by, args.note)
     else:
+        before = {a.id: a for a in project.state.gate.approvals}
         ids = project.approve_findings(draft_id, args.by, args.reason, finding_ids=args.finding, cls=args.cls,
                                        kind=args.kind, note=args.note)
         print(f"recorded {len(ids)} approval(s)")
+        if not ids:  # the same approval already exists (content-addressed): say by whom, so 0 is not alarming
+            wanted = {("class", args.cls, args.kind, None)} | {("finding", None, "verbatim", f)
+                                                               for f in args.finding or []}
+            same = [a for a in before.values() if (a.scope, a.cls, a.kind, a.finding) in wanted]
+            who = sorted({a.approved_by for a in same})
+            print(f"already approved{' by ' + ', '.join(who) if who else ''}; nothing new to record")
     return 0
 
 

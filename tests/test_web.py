@@ -424,8 +424,18 @@ def test_history_ops_unclickable_elements_and_undefined_rule_actions(site, tmp_p
         with pytest.raises(ValueError, match="undefined actions"):
             project.check_rules("nav", [{"statement": "x", "checks": [
                 {"kind": "outcome", "a": {"actions": ["to_c"]}, "expect": {"headings": ["Page C"]}}]}], workers=1)
+        project.check_rules("nav", [{"statement": "The link on page A leads to page B.", "checks": [
+            {"kind": "outcome", "a": {"actions": ["click[link:Go to B]"]}, "expect": {"headings": ["Page B"]}}]}],
+            workers=1)  # a discovery-style name defines itself
+        defined = project.action_table()["click[link:Go to B]"]
+        assert (defined["op"], defined["role"], defined["name"]) == ("click", "link", "Go to B")
         found = project.discover_ui("nav", max_states=5, max_depth=2)  # the skip link no longer stops the crawl
         assert len(found["screens"]) >= 2
+        project.check_rules("nav", [{"statement": "The skip link cannot be used by a pointer.", "checks": [
+            {"kind": "outcome", "a": {"actions": ["skip"]}, "expect": {"value": "NA"}}]}], workers=1)
+        counts = project.coverage("nav", record_unknowns=False)["counts"]
+        assert counts["control link:Skip to content"] == 0  # a click that only came back NA exercised nothing
+        assert counts["control link:Go to B"] == 1  # the rule above clicked it
     finally:
         local.close()
 
