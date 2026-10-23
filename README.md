@@ -9,7 +9,7 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776ab?style=flat-square&logo=python&logoColor=white)](pyproject.toml)
 [![MCP servers](https://img.shields.io/badge/MCP-observe_%C2%B7_clean-5c4ee5?style=flat-square)](#how-teardown-works)
 [![Targets](https://img.shields.io/badge/targets-CLI_%C2%B7_web_%C2%B7_Android-0f766e?style=flat-square)](#what-you-can-analyze)
-[![Status: pre-release](https://img.shields.io/badge/status-pre--release-f59e0b?style=flat-square)](ROADMAP.md)
+[![Release 0.2.0](https://img.shields.io/badge/release-0.2.0-f59e0b?style=flat-square)](CHANGELOG.md)
 [![Apache-2.0 license](https://img.shields.io/badge/license-Apache--2.0-d22128?style=flat-square)](LICENSE)
 
 [Quick start](#quick-start) · [How Teardown works](#how-teardown-works) · [What you can analyze](#what-you-can-analyze) · [Results](#results) · [FAQ](#faq) · [Documentation](#documentation)
@@ -19,8 +19,8 @@
 </div>
 
 > [!IMPORTANT]
-> Teardown is pre-release. You declare the purpose of every analysis at intake and own its legal assessment.
-> Read [Responsible use](#responsible-use) first.
+> Teardown is early software (0.2). You declare the purpose of every analysis at intake and own its legal
+> assessment. Read [Responsible use](#responsible-use) first.
 
 <div align="center">
 
@@ -77,12 +77,13 @@ claude mcp add teardown-observe -- uv run --directory /path/to/teardown teardown
 Then ask:
 
 ```text
-Open web:http://localhost:3000/ as a research target and observe how the signup form behaves:
-what it accepts and refuses, its error messages, and what happens when the API fails.
-Write rules, measure coverage and release the spec.
+Open web:http://localhost:3000/ as a research target and follow the observe_target playbook:
+discover the UI, probe every field, inject API faults, state rules, close the coverage gaps
+and release the spec.
 ```
 
-The observer guide ([docs/observer-guide.md](docs/observer-guide.md)) is what the agent should read first.
+The playbook ([docs/observer-playbook.md](docs/observer-playbook.md)) is served as the `observe_target` MCP
+prompt; the observer guide ([docs/observer-guide.md](docs/observer-guide.md)) details every tool.
 
 ### Review and release
 
@@ -93,7 +94,9 @@ teardown release --project P --feature F
 teardown export-clean --project P --out KIT        # the kit: released spec + build/verify scaffolding
 ```
 
-In strict mode every release needs your approval at a terminal. The observer's tools cannot approve anything
+In strict mode every release needs your approval at a terminal, and the observer's tools cannot approve
+anything. In practice that is a few class-level decisions per release: approve the app text the clone must
+reproduce, approve the action names, acknowledge the coverage gaps the observer explained
 ([docs/strict-gate.md](docs/strict-gate.md)).
 
 ### Rebuild in the clean room
@@ -112,11 +115,13 @@ teardown cleanroom down  --project P
 
 1. **Observe.** Drivers run the target and capture behavior only: outputs and file effects for CLIs,
    accessibility trees and API exchanges for web apps, accessibility trees for Android. A *mapper* turns each
-   observation into a compact, wording-agnostic symbol.
-2. **Generalize.** The observer probes fields and inputs by equivalence class and boundary. It injects faults
-   (server errors, network failures, malformed bodies, unreadable files, airplane mode) and states rules in its
-   own words. Teardown checks every rule against the original and records it as corroborated or falsified.
-   Coverage turns anything not exercised into an unknown.
+   observation into a compact, wording-agnostic symbol. For web apps that symbol is versioned (`web.aria/v8`)
+   and records everything a user-facing Playwright test can tell apart.
+2. **Generalize.** UI discovery crawls every screen. The observer probes fields by equivalence class and
+   boundary, injects faults (server errors, network failures, malformed bodies, unreadable files, airplane
+   mode) and states rules in its own words. Teardown checks every rule against the original and records it as
+   corroborated or falsified. Coverage lists what is left (each control, field, endpoint × fault, data state,
+   live output), and a release is refused until every item is exercised or explained.
 3. **Gate.** The release is checked for copied expression (verbatim and near-verbatim matches against everything
    observed and every ingested document) and for real names, which become a codename. In strict mode, findings
    need your recorded approval.
@@ -129,7 +134,7 @@ teardown cleanroom down  --project P
 | Target | What Teardown observes | Faults it can inject | Requirements | Status |
 |---|---|---|---|---|
 | Command-line tools | Exit code, stdout, diagnostic presence and errno class, file effects | Closed/full stdio, unreadable files, read-only directories | Docker (isolated runner) or local | **Stable** |
-| Web apps | Everything a user-facing Playwright locator or assertion can tell apart (the accessibility tree with roles, names, levels, states and nesting; field values and properties; titles, focus, status messages, landmarks text), plus API method/path/status and public-contract selectors | 5xx, network failure, timeout, malformed body, pending requests | Playwright Chromium; optional backend reset command | **Working**: 53% → 56% → 81.5% → 93.1% → 89.8% → 87.5% → 99.2% → 96.9% on eight held-out apps (see Results) |
+| Web apps | Everything a user-facing Playwright locator or assertion can tell apart (the accessibility tree with roles, names, levels, states and nesting; field values and properties; titles, focus, status messages, landmarks text), plus API method/path/status and public-contract selectors | 5xx, network failure, timeout, malformed body, pending requests | Playwright Chromium; optional backend reset command | **Working**: 99.2% and 96.9% of hidden tests on two held-out apps (see Results) |
 | Android apps | Controls by role and name with state flags, visible text, system dialogs | Network off (airplane mode) | Android SDK, emulator or device via `adb` | **Working** |
 | Linux desktop apps | AT-SPI tree: windows, controls, text, list items | — | Docker (Xvfb + AT-SPI container) | Experimental |
 | macOS, Windows, iOS | — | — | — | Not started |
@@ -141,6 +146,38 @@ Teardown refuses to bypass protections and never captures implementation-tier da
 
 Each result was scored on a hidden test suite that the observer never saw, against a pinned denominator. Each
 comes with its caveat. The method is in [docs/evaluation.md](docs/evaluation.md).
+
+### Web apps no model has seen: 129/130 and 126/130
+
+Eight web apps were written for the benchmark, each with its own hidden Playwright suite. Every round ran the
+same way: the tooling was frozen before the run, the observer and the implementer were each confined to their
+own container, and the clone was scored on the hidden suite.
+
+| round | app | abstraction | gate | hidden tests passed |
+|---|---|---|---|---|
+| 1 | Kilnroll | `web.aria/v1` | standard | 64/120 (53%) |
+| 2 | Kilnshare | `v2` | standard | 73/131 (56%) |
+| 3 | Lockline | `v3` | standard | 106/130 (81.5%) |
+| 4 | Scionry | `v4` | standard | 121/130 (93.1%) |
+| 5 | Wickward | `v5` | standard | 114/127 (89.8%) |
+| 6 | Fogline | `v6` | standard | 112/128 (87.5%) |
+| 7 | Strewnfield | `v8` | **strict** | **129/130 (99.2%)** |
+| 8 | Belfry | `v8` | **strict** | **126/130 (96.9%)** |
+
+- **Every clone matched its spec.** What the hidden suites caught were things the spec did not contain.
+- **Rounds 1–6** each exposed the next kind of page structure the abstraction did not record yet (titles and
+  focus, tables, landmarks, generated text, dialog roles, row headers). Each was then added as a new version,
+  so released specs keep verifying.
+- **`v8` came from a principle instead:** it records every difference a user-facing Playwright locator or
+  assertion can see, checked by an audit of 39 page pairs. In both `v8` rounds every miss was a state or route
+  the observer never exercised, such as a locked record's edit page or the sign-in page while signed in.
+- **Rounds 7 and 8 ran under the strict gate.** The observer could not approve anything. A person approved
+  each release at their own terminal with three class-level decisions, recorded in the audit log.
+
+Reports: [1](research/15-held-out-web-kilnroll.md) · [2](research/16-held-out-web-kilnshare.md) ·
+[3](research/17-held-out-web-lockline.md) · [4](research/18-held-out-web-scionry.md) ·
+[5](research/19-held-out-web-wickward.md) · [6](research/20-held-out-web-fogline.md) ·
+[7](research/21-held-out-web-strewnfield-strict.md) · [8](research/22-held-out-web-belfry-strict.md)
 
 ### A command-line tool no model has seen: 397/397
 
@@ -156,47 +193,6 @@ Wickwright, a three-screen candle-batch planner with validation, a capped queue 
 benchmark with 118 hidden scenarios. A confined observer worked through MCP alone, and a confined implementer saw
 only the spec. The clone passes 113. The five misses are input-check orders and messages that were never probed.
 [Report](research/14-android-novel-confined.md)
-
-### Web apps no model has seen, held out: 53% → 56% → 81.5% → 93.1% → 89.8% → 87.5% → 99.2% → 96.9%
-
-Kilnroll, a pottery-studio kiln logbook, was written for the benchmark with 120 hidden Playwright tests. Nothing
-was tuned on it, and the tooling was frozen before the run. The clone matched every observed behavior (224/224
-conformance), but half the hidden tests checked things the web abstraction did not record yet: page titles,
-focus after validation errors, flash messages, table cells. `web.aria/v2` records them; the next held-out app
-will show what that is worth. [Report](research/15-held-out-web-kilnroll.md)
-
-A second held-out app (Kilnshare, 131 hidden tests) scored 73 with `v2`: nothing in what v2 added failed, but
-the suite reaches rows through *tables*, and v2 recorded cells without their table. `web.aria/v3` records
-tables and description lists. [Report](research/16-held-out-web-kilnshare.md)
-
-A third held-out app (Lockline, 130 hidden tests, a neutral brief) scored **106 with `v3`**, from the thinnest
-spec of the three. The remaining misses are pages the observer never visited, plus named regions and inline text
-runs the abstraction still represents lossily. [Report](research/17-held-out-web-lockline.md)
-
-A fourth held-out app (Scionry, 130 hidden tests) scored **121 with `v4`**. Releases now need coverage gaps
-exercised or explained, so the observer covered 77 of 79 items. The rest are CSS-generated icon text and data
-states the observer did not create. [Report](research/18-held-out-web-scionry.md)
-
-A fifth held-out app (Wickward, 127 hidden tests) scored **114 with `v5`**. Nothing failed for CSS-generated
-text, list data states or session expiry, which round 5 targeted. The new misses are an `alertdialog` role and
-accessible descriptions. [Report](research/19-held-out-web-wickward.md)
-
-A sixth held-out app (Fogline, 128 hidden tests) scored **112 with `v6`**, and its clone passed verification on
-the first call. Nothing failed for dialog roles, descriptions, empty submits, query encoding or history. The new
-misses are row headers, `aria-invalid` and named groups, which `web.aria/v7` now records. Three more were
-observer gaps, two of them hidden by a fault-coverage bug that the observer itself reported (now fixed).
-[Report](research/20-held-out-web-fogline.md)
-
-A seventh held-out app (Strewnfield, 130 hidden tests) scored **129 with `v8`, under the strict gate**. `v8`
-was built from an audit of what a user-facing Playwright suite can tell apart, rather than from the previous
-round's misses. The observer could not approve. A person approved the release at their own terminal with
-three class-level decisions, and the audit log records each one. The only miss was an empty list's message
-the observer never produced. [Report](research/21-held-out-web-strewnfield-strict.md)
-
-An eighth held-out app (Belfry, 130 hidden tests) repeated those conditions and scored **126**. The four
-misses were again states the observer never exercised: a locked record's edit page, the sign-in page while
-signed in, and focus after a move in the middle of a list. None was structure the spec failed to record.
-[Report](research/22-held-out-web-belfry-strict.md)
 
 ### RealWorld "Conduit" web frontend: 99/101
 
@@ -269,6 +265,7 @@ expression. It does not address patents, trademarks or trade dress.
 
 ## Documentation
 
+- [Observer playbook](docs/observer-playbook.md): the loop the observer agent follows (also an MCP prompt).
 - [Observer guide](docs/observer-guide.md): driving the dirty side for CLI, web and Android targets.
 - [Strict gate](docs/strict-gate.md): reviewing findings and approving releases.
 - [Clean runtime](docs/clean-runtime.md): the enforced clean room and observer room.

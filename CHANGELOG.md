@@ -1,80 +1,78 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (2026-10-23)
 
-### Observer productivity
+Web reimplementation reaches 99.2% and 96.9% of hidden tests on two held-out apps, under the strict gate.
 
-- `discover_ui`: a bounded crawl that clicks every enabled control and fills forms. Screens are identified by
-  route, headings, controls and enablement, and pages that differ only in data are explored once.
-- UI coverage from discovery (every control and field), plus endpoint × fault coverage.
-- `suggest_probes`: gaps become ready-made fault actions with a path that triggers them, field-probe
-  arguments, and click paths.
-- The observer playbook (`docs/observer-playbook.md`), served as the `observe_target` MCP prompt.
+### Highlights
+
+- **`web.aria/v8`**, the default for new web projects. It records everything a user-facing Playwright locator
+  or assertion can tell apart:
+  - `outline`: the accessibility tree, with roles, names, levels, states, nesting and counts;
+  - `properties`: field values (never a password's), required, readonly, masked, error message, sort state,
+    progress values and `title` attributes.
+
+  A surface audit (`teardown.drivers.web.surface`) of 39 page pairs, plus 7 implementation-only pairs, keeps
+  it that way. `v8` records all 39 and none of the 7; `v7` recorded 17.
+- **Observer tooling.**
+  - `discover_ui` crawls every screen. Its runs accumulate, one per role or start point.
+  - Coverage lists every control, field, endpoint × fault class, data state (tables and named lists), session
+    expiry and live output.
+  - `suggest_probes` turns each gap into a ready-made next step, and a release is refused until every gap is
+    exercised or explained.
+  - The observer playbook is served as the `observe_target` MCP prompt.
+- **The strict gate, tested end to end.** `tests/test_strict_web.py` covers it automatically: the observer
+  works over MCP/HTTP and approvals are typed into a pseudo-terminal. Two live held-out rounds also used it,
+  each approved by a person at their own terminal.
 
 ### Web observation
 
-- `web.aria/v3`: `tables` (name, columns, rows) and `definitions`
-  (description lists).
-- `web.aria/v2`. It adds page title, focus, status messages, dialogs, select
-  options, `aria-current`, and table cells, and undoes Playwright's YAML quoting for names with `#` or `:`.
-  `web.aria/v1` is unchanged, so existing specs keep verifying.
+- Versioned abstractions. Each project keeps the version it was created with, so released specs keep
+  verifying:
+  - `v2`: page title, focus, status messages, dialogs, select options and `aria-current`;
+  - `v3`: tables and description lists;
+  - `v4`: landmark text as text assertions read it;
+  - `v5`: CSS-generated text;
+  - `v6`: dialog roles and accessible descriptions;
+  - `v7`: `aria-invalid`, row headers and named groups;
+  - `v8`: the outline and properties described above.
+- Fault actions: `{mode: clear}`; `hang`/`release` for pending states. Actions: `back`/`forward`/`reload`,
+  plus `within`/`nth` for controls with the same name.
+- API paths fold id segments. Discovery and coverage count table-row links once per table.
+
+### Observer
+
+- Field probes:
+  - find a minimum length as well as a maximum;
+  - read the screen without `submit` (live outputs);
+  - count an API 4xx, a dialog left open or an `aria-invalid` field as a refusal;
+  - mask echoes;
+  - take `accepted_if`.
+- Rule checks:
+  - reject undefined, empty or inline actions with a clear message, while `click[role:name]` names define
+    themselves;
+  - nested `null` asserts absence, and `{}` or `[]` mean none.
+- Coverage credits a fault only when a recorded call with that method and path was made while it was active.
+  A control whose clicks only came back `NA` is not covered.
+- `run_sequence` takes `keys`. `propose_claim` lists the valid kinds. `ingest_docs` reports paragraphs the
+  corpus already held. Fault suggestions show the observed path next to the contract path.
+
+### Gate
+
+- Strict mode refuses a release until coverage gaps are measured and acknowledged. `teardown review` shows the
+  gaps for rules-only drafts too.
+- A repeated `teardown approve` says who already approved. Generated unknowns are interface findings.
 
 ### Fixes
 
-- UI coverage counts only actions a probe or rule runs.
-- Coverage resolves its own gap unknowns once covered.
-- Observer-side errors carry their message.
+- Observer-side errors carry their message. Unexpected gate errors come back generic.
 - The room images copy the license files and the packaged playbook.
 
 ### Results
 
-- First held-out web result, Kilnroll: 64/120 with the frozen tooling. The misses are what `v2` now records
-  (`research/15`).
-- Second held-out web result, Kilnshare: 73/131 with `v2`. No misses in what `v2` added; 54 were table
-  structure, which `v3` records (`research/16`).
-- Third held-out web result, Lockline: 106/130 with `v3` (`research/17`).
-- `web.aria/v4`: landmark text as text assertions read it.
-- Releases need coverage gaps exercised, explained or accepted with a reason; strict mode gates every draft on
-  measured coverage.
-- Fourth held-out web result, Scionry: 121/130 with `v4` (`research/18`).
-- `web.aria/v5`: CSS-generated text (`generated`).
-- Coverage lists data states per table (none, one, several) and session expiry for apps with a sign-in.
-- Fifth held-out web result, Wickward: 114/127 with `v5` (`research/19`).
-- Nested subset expectations need their keys; `fault {mode: clear}` removes injected faults.
-- Field probes read status messages and mask echoes in the length search; generated unknowns are interface
-  findings.
-- Table-row links count as one representative per table in discovery and coverage. API paths fold id
-  segments. `within`/`nth` handle same-named controls.
-- Discovery no longer fails on off-screen controls or selects; `back`/`forward`/`reload` actions; rule checks
-  reject undefined actions.
-- `web.aria/v6`: dialog roles and accessible descriptions.
-- Sixth held-out web result, Fogline: 112/128 with `v6` (`research/20`).
-- Seventh held-out web result, Strewnfield: 129/130 with `v8` under the strict gate, a person approving at a
-  terminal (`research/21`).
-- Eighth held-out web result, Belfry: 126/130 with `v8` under the strict gate (`research/22`).
-- `discover_ui` runs accumulate instead of replacing the inventory. Fault suggestions show the observed path
-  next to the contract path. `propose_claim` lists the valid kinds; `run_sequence` takes `keys`.
-- Field probes find a minimum length before the maximum, and count an API 4xx, a dialog left open or an
-  `aria-invalid` field as a refusal. Named lists get data-state coverage. An expected `{}` means none. Controls
-  whose clicks only came back `NA` are not covered. `click[role:name]` names define themselves. A repeated
-  `approve` says who already approved.
-- `web.aria/v8`, the default for new web projects: `outline` (the accessibility tree: roles, names, levels,
-  states, nesting, counts) and `properties` (field values except passwords, required, readonly, masked, error
-  message, sort state, progress values, title attributes). A surface audit
-  (`teardown.drivers.web.surface`) lists every difference a user-facing Playwright locator or assertion can
-  see. v8 records all 39 and none of 7 implementation-only differences; v7 recorded 17.
-- `teardown review` lists coverage gaps for rules-only drafts too; before, it showed none while release
-  refused them. Found by a new end-to-end strict test (`tests/test_strict_web.py`): the observer works through
-  MCP over HTTP only, and the person approves in a real pseudo-terminal.
-- Live outputs: discovery marks fields whose typing changes the screen without a click (previews, totals,
-  counters); coverage lists each as `live output` until the screen is recorded right after typing three
-  different values; `probe_web_field` reads the screen without `submit`, and `suggest_probes` proposes it.
-- `web.aria/v7`: an `invalid` control flag for `aria-invalid`, `row_headers`
-  per table, and `groups` (named groups, radiogroups and toolbars with their controls).
-- Fault coverage counts an item only when a recorded observation shows that method and path called while a
-  matching fault was active. Before, a fault on a GET also covered a POST to the same path.
-- Rule checks reject inline action objects with a clear message; nested `null` in an expectation asserts
-  absence; `ingest_docs` reports paragraphs already in the corpus.
+- Eight held-out web apps, with the tooling frozen per round and both sides confined:
+  53% → 56% → 81.5% → 93.1% → 89.8% → 87.5% (`v1`–`v6`, standard gate), then 99.2% and 96.9% (`v8`, strict
+  gate) (`research/15`–`22`).
 
 ## 0.1.0 (2026-10-22)
 
