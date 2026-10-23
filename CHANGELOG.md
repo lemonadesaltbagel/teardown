@@ -54,6 +54,9 @@
   message, sort state, progress values, title attributes). A surface audit
   (`teardown.drivers.web.surface`) lists every difference a user-facing Playwright locator or assertion can
   see. v8 records all 39 and none of 7 implementation-only differences; v7 recorded 17.
+- `teardown review` lists coverage gaps for rules-only drafts too; before, it showed none while release
+  refused them. Found by a new end-to-end strict test (`tests/test_strict_web.py`): the observer works through
+  MCP over HTTP only, and the person approves in a real pseudo-terminal.
 - Live outputs: discovery marks fields whose typing changes the screen without a click (previews, totals,
   counters); coverage lists each as `live output` until the screen is recorded right after typing three
   different values; `probe_web_field` reads the screen without `submit`, and `suggest_probes` proposes it.

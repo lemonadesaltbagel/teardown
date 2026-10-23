@@ -356,7 +356,7 @@ def _review(args) -> int:
     draft = project.workspace.get(draft_id, SpecDraft)
     _, report = project.review_spec(draft_id)
     summary = report.summary()
-    gaps = project.coverage_gaps(draft.feature) if draft.probes is not None else []
+    gaps = project.coverage_gaps(draft.feature)  # rules-only drafts too: release checks them either way
     acknowledged = set((project.state.coverage_approvals.get(draft.feature) or {}).get("gaps", []))
     summary.update(draft=draft_id, feature=draft.feature, coverage_gaps=gaps,
                    coverage_unacknowledged=[g for g in gaps if g not in acknowledged],
