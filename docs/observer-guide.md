@@ -109,7 +109,7 @@ p.api_contract()                                                       # value-f
     "name": ...}` scopes the lookup, and `nth` picks one among several matches.
   - **Outcomes:** a missing element, or one a user could not act on, makes the step `NA`; a disabled one makes
     it `DISABLED`. An outcome check expects these as `{"value": "NA"}` / `{"value": "DISABLED"}`.
-- **A symbol is the structured accessibility view** (`web.aria/v7`, the default for new projects):
+- **A symbol is the structured accessibility view** (`web.aria/v8`, the default for new projects):
   - `path`, `title`, `headings`, `alerts`;
   - `status` (live-region messages such as "Saved.");
   - `text`;
@@ -128,11 +128,22 @@ p.api_contract()                                                       # value-f
   - `generated`: text CSS inserts with `::before`/`::after` (icons, separators), one `before|text|after` entry
     per element. Accessible names include it; element text does not;
   - `descriptions`: each control's accessible description (`aria-describedby` / `aria-description`); `dialogs`
-    entries carry the role (`alertdialog:Remove …` vs `dialog:…`).
+    entries carry the role (`alertdialog:Remove …` vs `dialog:…`);
+  - `outline`: the whole accessibility tree, one line per node, indented by nesting: roles, names, heading
+    levels, states (`[checked=mixed]`), placeholders, and how many of each and inside what. Field values are
+    left out;
+  - `properties`: role:name → what the tree reduces or leaves out: `value` (never a password field's),
+    `required`, `readonly`, `masked` (a password field), `error` (`aria-errormessage`), `sort` (`aria-sort`),
+    progress/meter values and `title` attributes.
+
+  `v8` records every difference a user-facing Playwright locator or assertion can see, and none that only the
+  implementation shows (classes, ids, test ids, wrappers, link targets). `teardown.drivers.web.surface` lists
+  the cases, and a test keeps them that way. Field values are in `properties`: leave it out of `keys` when a
+  `same` check compares runs that type different values.
 
   Projects keep the version they were created with (`v1`: no title, focus, status or tables; `v2`: table cells
   flattened into `text`; `v3`: no landmarks; `v4`: no `generated`; `v5`: dialogs without roles, no
-  `descriptions`; `v6`: no `aria-invalid` flag, row headers or groups).
+  `descriptions`; `v6`: no `aria-invalid` flag, row headers or groups; `v7`: no `outline` or `properties`).
 - Rules on UIs compare **sequences**: `{"actions": [...]}` on each side; restrict `keys` to what the rule is about
   (`controls`, `path`, `alerts`, `network`) so incidental text does not break the relation.
 - Field probes find length limits and classify refusals as client-side (submit disabled / no request) or

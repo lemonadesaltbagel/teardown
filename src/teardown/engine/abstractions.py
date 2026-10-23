@@ -180,11 +180,18 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
     table: dict[str, Any] | None = None  # v3: the table being read, with its depth
     term: str | None = None  # v3: a term waiting for its definition
     groups: list[tuple[int, str]] = []  # v7: named groups open around the current node
+    outline: list[str] = []  # v8: the whole tree, field values left out
     for n in parse_aria(observation["aria"], yaml_strings=version >= 2):
         if skip_depth is not None and n["depth"] > skip_depth:
             continue
         skip_depth = None
         role = n["role"]
+        if version >= 8 and role != "/url":  # link targets are not part of what a user-facing test reads
+            line = "  " * n["depth"] + role + (f' "{n["name"]}"' if n["name"] is not None else "")
+            line += "".join(f" [{a}]" for a in n["attrs"])
+            if n["text"] and role not in _VALUE_ROLES:  # values (secrets among them) come from `properties`
+                line += f": {n['text'].strip()}"
+            outline.append(line)
         if version >= 7:
             while groups and n["depth"] <= groups[-1][0]:
                 groups.pop()
@@ -265,6 +272,11 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
         out["landmarks"] = dict(sorted(observation["landmarks"].items()))
     if version >= 5 and observation.get("generated"):  # CSS-inserted text: "before|element text|after"
         out["generated"] = list(observation["generated"])
+    if version >= 8:
+        if outline:
+            out["outline"] = outline
+        if observation.get("properties"):
+            out["properties"] = dict(sorted(observation["properties"].items()))
     if version >= 6 and observation.get("descriptions"):  # aria-describedby / aria-description per control
         out["descriptions"] = dict(sorted(observation["descriptions"].items()))
     if version >= 2:  # what the accessibility snapshot leaves out
@@ -294,6 +306,11 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
             out["definitions"] = [[t, CALENDAR_DATE.sub("<date>", d)] for t, d in out["definitions"]]
         if "landmarks" in out:
             out["landmarks"] = {k: CALENDAR_DATE.sub("<date>", v) for k, v in out["landmarks"].items()}
+        if "outline" in out:
+            out["outline"] = [CALENDAR_DATE.sub("<date>", line) for line in out["outline"]]
+        for props in out.get("properties", {}).values():
+            if isinstance(props.get("value"), str):
+                props["value"] = CALENDAR_DATE.sub("<date>", props["value"])
     for key in ("alerts", "text"):
         if not out[key]:
             out.pop(key)
@@ -320,6 +337,11 @@ BUILTINS["web.aria/v6"] = lambda observation, params: web_aria(observation, para
 # stays in the `invalid` key); tables list their `row_headers`; `groups` maps each named group, radiogroup or
 # toolbar to the controls inside it.
 BUILTINS["web.aria/v7"] = lambda observation, params: web_aria(observation, params, version=7)
+# v8: the user-facing Playwright surface (`teardown.drivers.web.surface`). `outline` is the accessibility tree
+# (roles, names, levels, states, nesting, counts; field values left out), and `properties` holds what the tree
+# reduces or omits: field values (never a password's), required, readonly, masked, error message, sort state,
+# progress values and title attributes.
+BUILTINS["web.aria/v8"] = lambda observation, params: web_aria(observation, params, version=8)
 
 
 # -- desktop -----------------------------------------------------------------------------------------------------
@@ -425,6 +447,9 @@ KNOWN_KEYS = {
     "web.aria/v7": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract", "title",
                     "focus", "status", "dialogs", "options", "tables", "definitions", "landmarks", "generated",
                     "descriptions", "groups", "flagged"},
+    "web.aria/v8": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract", "title",
+                    "focus", "status", "dialogs", "options", "tables", "definitions", "landmarks", "generated",
+                    "descriptions", "groups", "flagged", "outline", "properties"},
     "desktop.a11y/v1": {"windows", "controls", "text", "items"},
     "android.a11y/v1": {"controls", "text", "system"},
 }

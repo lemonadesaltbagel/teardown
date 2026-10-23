@@ -49,7 +49,12 @@
   reject undefined actions.
 - `web.aria/v6`: dialog roles and accessible descriptions.
 - Sixth held-out web result, Fogline: 112/128 with `v6` (`research/20`).
-- `web.aria/v7`, the default for new web projects: an `invalid` control flag for `aria-invalid`, `row_headers`
+- `web.aria/v8`, the default for new web projects: `outline` (the accessibility tree: roles, names, levels,
+  states, nesting, counts) and `properties` (field values except passwords, required, readonly, masked, error
+  message, sort state, progress values, title attributes). A surface audit
+  (`teardown.drivers.web.surface`) lists every difference a user-facing Playwright locator or assertion can
+  see. v8 records all 39 and none of 7 implementation-only differences; v7 recorded 17.
+- `web.aria/v7`: an `invalid` control flag for `aria-invalid`, `row_headers`
   per table, and `groups` (named groups, radiogroups and toolbars with their controls).
 - Fault coverage counts an item only when a recorded observation shows that method and path called while a
   matching fault was active. Before, a fault on a GET also covered a POST to the same path.

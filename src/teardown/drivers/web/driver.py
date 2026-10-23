@@ -141,6 +141,63 @@ _LANDMARK_PROBE = """() => {
   return out;
 }"""
 
+# Properties a user-facing test can assert that the accessibility snapshot leaves out or reduces: field values
+# (never a password field's), required, readonly, password masking, the error message (aria-errormessage), column
+# sort state, progress and meter values, and title attributes. Keyed role:name like the state probe.
+_PROPERTIES_PROBE = """() => {
+  const roleOf = el => {
+    const explicit = el.getAttribute('role'); if (explicit) return explicit;
+    const tag = el.tagName.toLowerCase(), type = (el.getAttribute('type') || '').toLowerCase();
+    if (tag === 'a' && el.hasAttribute('href')) return 'link';
+    if (tag === 'button' || ['button', 'submit', 'reset'].includes(type)) return 'button';
+    if (tag === 'select') return el.multiple || el.size > 1 ? 'listbox' : 'combobox';
+    if (tag === 'textarea') return 'textbox';
+    if (tag === 'th') return el.getAttribute('scope') === 'row' ? 'rowheader' : 'columnheader';
+    if (tag === 'progress') return 'progressbar';
+    if (tag === 'img') return 'img';
+    if (tag === 'input') return {checkbox: 'checkbox', radio: 'radio', range: 'slider', number: 'spinbutton',
+                                 search: 'searchbox'}[type] || 'textbox';
+    return tag;
+  };
+  const text = el => (el.textContent || '').replace(/\\s+/g, ' ').trim();
+  const labelledBy = el => (el.getAttribute('aria-labelledby') || '').split(/\\s+/).filter(Boolean)
+    .map(id => text(document.getElementById(id) || {})).join(' ');
+  const nameOf = el => (el.getAttribute('aria-label') || labelledBy(el) ||
+                        (el.labels && el.labels[0] && text(el.labels[0])) || el.getAttribute('alt') ||
+                        (['input', 'select', 'textarea'].includes(el.tagName.toLowerCase()) ? ''
+                         : text(el)).slice(0, 80) ||
+                        el.getAttribute('placeholder') || '').replace(/\\s+/g, ' ').trim();
+  const out = {};
+  const sel = 'input, textarea, select, progress, meter, [role=progressbar], [role=meter], [role=slider], ' +
+              '[role=spinbutton], [aria-sort], [title], [aria-errormessage], [aria-required], [aria-readonly]';
+  for (const el of document.querySelectorAll(sel)) {
+    if (!el.getClientRects().length) continue;
+    const tag = el.tagName.toLowerCase(), type = (el.getAttribute('type') || '').toLowerCase();
+    if (tag === 'input' && type === 'hidden') continue;
+    const p = {};
+    const isField = tag === 'textarea' || (tag === 'input' &&
+      !['checkbox', 'radio', 'submit', 'button', 'reset', 'file', 'image', 'password'].includes(type));
+    if (isField && el.value) p.value = el.value;
+    if (tag === 'input' && type === 'password') p.masked = true;
+    if (tag === 'progress' || tag === 'meter') p.value = String(el.value);
+    if (el.hasAttribute('aria-valuenow'))
+      p.value = el.getAttribute('aria-valuetext') || el.getAttribute('aria-valuenow');
+    if (el.required || el.getAttribute('aria-required') === 'true') p.required = true;
+    if (((isField || type === 'password') && el.readOnly) || el.getAttribute('aria-readonly') === 'true')
+      p.readonly = true;
+    const err = el.getAttribute('aria-errormessage');
+    if (err && document.getElementById(err)) p.error = text(document.getElementById(err));
+    const sort = el.getAttribute('aria-sort');
+    if (sort && sort !== 'none') p.sort = sort;
+    if (el.getAttribute('title')) p.title = el.getAttribute('title');
+    if (!Object.keys(p).length) continue;
+    let key = roleOf(el) + ':' + nameOf(el), i = 2;
+    while (key in out) key = roleOf(el) + ':' + nameOf(el) + ' #' + i++;
+    out[key] = p;
+  }
+  return out;
+}"""
+
 # Text that CSS inserts (::before / ::after string content): part of what the user sees and of accessible names,
 # but not of the element's own text. One "before|text|after" entry per visible element, capped.
 _GENERATED_PROBE = """() => {
@@ -632,6 +689,7 @@ class WebDriver(Driver):
             **self.page.evaluate(_STATE_PROBE),
             "landmarks": self.page.evaluate(_LANDMARK_PROBE),
             "generated": self.page.evaluate(_GENERATED_PROBE),
+            "properties": self.page.evaluate(_PROPERTIES_PROBE),
         }
 
     def actions(self) -> list[str]:
