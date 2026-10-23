@@ -103,7 +103,7 @@ def test_server_side_refusals_are_told_apart_from_acceptance():
     refused, _ = judge(good)
     too_long = {"path": "/specimens/SF-1", "network": ["POST /api/specimens/{id}/quarantine 422"],
                 "dialogs": ["dialog:Quarantine SF-1"], "controls": {"textbox:Reason": ["filled", "invalid"]}}
-    assert outcome(too_long)["flagged"] == ["textbox:Reason"] and outcome(too_long)["dialogs"]
+    assert outcome(too_long)["controls"] == {"textbox:Reason": ["filled", "invalid"]} and outcome(too_long)["dialogs"]
     assert refused(outcome(too_long))
     for signal in ({"network": ["POST /api/specimens/{id}/quarantine 422"]},
                    {"dialogs": ["dialog:Quarantine SF-1"], "status": ["Quarantined."],
@@ -125,3 +125,18 @@ def test_length_bounds_find_a_minimum_before_the_maximum():
     assert length_bounds(field(1, 40), "text", reference) == (None, 40)
     assert length_bounds(field(1, 10 ** 6), "text", reference) == (None, None)
     assert length_bounds(field(5000, 6000), "text", reference) == (None, None)  # nothing accepted up to 4096
+
+
+def test_a_probe_rows_outcome_matches_the_symbol_it_was_taken_from():
+    """Probe rows store an outcome and verification matches it against the live symbol: every key the outcome
+    adds must be a real symbol key (a derived one made 16 rows of the eighth held-out round unverifiable)."""
+    import json
+
+    from teardown.engine.fieldprobe import outcome_json
+    from teardown.engine.mapper import symbol_matches
+
+    symbol = json.dumps({"path": "/recitals/new", "headings": ["New recital"], "alerts": [],
+                         "network": ["POST /api/recitals 422"], "dialogs": ["dialog:Return recital"],
+                         "controls": {"textbox:Title": ["filled", "invalid"], "button:Create": []},
+                         "flagged": ["group:Slot"], "text": ["Enter a title of 3 to 80 characters."]})
+    assert symbol_matches(symbol, outcome_json(symbol), "subset")

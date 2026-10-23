@@ -37,6 +37,7 @@ from teardown.gate.gate import (
     make_codename,
     release,
     rename_symbol,
+    rename_text,
     review,
 )
 from teardown.gate.verifier import Verifier
@@ -1567,8 +1568,12 @@ class Project:
     def verifier(self) -> Verifier:
         def open_original(rel: SpecRelease) -> ObservationSession:
             state = self.state
+            # released test inputs name actions after the codename substitution ("click[link:Old Granary
+            # <codename>]"); the original runs the real action under that released name as well
+            table = self.action_table()
+            table = {**{rename_text(n, state.gate): a for n, a in table.items()}, **table}
             return ObservationSession(self.workspace,
-                                      open_driver(state.target_spec, self.action_table(), state.target_options),
+                                      open_driver(state.target_spec, table, state.target_options),
                                       self.mapper())
 
         def open_clone(clone_target: str, rel: SpecRelease, adapter: dict[str, Any] | None) -> ObservationSession:

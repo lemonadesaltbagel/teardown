@@ -11,6 +11,12 @@
   gives the sign-in steps and a `goto` for each. On the eighth held-out round's project it flags exactly what
   the observer missed: the sign-in page while signed in, and locked records' edit pages.
 
+- Fixed: field-probe rows stored a derived `flagged` key that live symbols do not have, so verification
+  reported those rows inconclusive instead of testing the clone (16 of the eighth round's 18 inconclusive
+  checks). Outcomes now hold only real symbol keys.
+- Fixed: released actions whose names carry the codename (`click[link:Old Granary <codename>]`) found nothing
+  when replayed on the original; the original now runs each real action under its released name too.
+
 ## 0.2.0 (2026-10-23)
 
 Web reimplementation reaches 99.2% and 96.9% of hidden tests on two held-out apps, under the strict gate.

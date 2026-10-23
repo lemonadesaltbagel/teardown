@@ -102,13 +102,16 @@ def outcome(symbol: Any, echo: str | None = None, keys: tuple[str, ...] = OUTCOM
     if not isinstance(symbol, dict):
         return {"value": symbol}
     out = {k: symbol[k] for k in keys if k in symbol}
-    # server-side refusals often show only as a dialog that stays open or a field marked aria-invalid
+    # server-side refusals often show only as a dialog that stays open or a field marked aria-invalid. Only real
+    # symbol keys go into the outcome (probe rows store it and verification matches it against live symbols):
+    # the marked fields as a `controls` subset, plus the symbol's own `flagged` list when it has one.
     if symbol.get("dialogs"):
         out["dialogs"] = symbol["dialogs"]
-    flagged = sorted({*(k for k, f in (symbol.get("controls") or {}).items() if "invalid" in f),
-                      *(symbol.get("flagged") or [])})
-    if flagged:
-        out["flagged"] = flagged
+    marked = {k: f for k, f in (symbol.get("controls") or {}).items() if "invalid" in f}
+    if marked:
+        out["controls"] = marked
+    if symbol.get("flagged"):
+        out["flagged"] = symbol["flagged"]
     patterns = _echo_patterns(echo)
     if patterns:
         def mask(x: Any) -> Any:
@@ -139,11 +142,16 @@ def _same_shape(result: dict[str, Any], reference: dict[str, Any]) -> bool:
         return False  # a different status message ("Saved <input>" vs "Name is too long")
     if result.get("invalid") and not reference.get("invalid"):
         return False
-    if set(result.get("flagged") or []) - set(reference.get("flagged") or []):
+    if _marked(result) - _marked(reference):
         return False  # a field the app marked aria-invalid
     if set(result.get("dialogs") or []) - set(reference.get("dialogs") or []):
         return False  # the dialog stayed open
     return not (_client_errors(result) - _client_errors(reference))  # an API 4xx the good value did not get
+
+
+def _marked(result: dict[str, Any]) -> set[str]:
+    """Fields an outcome shows as marked aria-invalid."""
+    return {k for k, f in (result.get("controls") or {}).items() if "invalid" in f} | set(result.get("flagged") or [])
 
 
 def _client_errors(result: dict[str, Any]) -> set[str]:

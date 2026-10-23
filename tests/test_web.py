@@ -875,3 +875,18 @@ def test_coverage_combines_routes_with_session_and_record_status(tmp_path):
         assert not {i for i in uncovered if i.startswith(("route /signin.html", "route /items/"))}
     finally:
         local.close()
+
+
+def test_the_original_runs_actions_under_their_released_codenamed_names(site, tmp_path):
+    from teardown.gate.gate import rename_text
+
+    project = Project(tmp_path / "p")
+    project.open_target("web:" + site.url("fetcher.html"), purpose="research", real_names=["Quotes"])
+    project.define_actions({"click[button:Load quotes]": {"op": "click", "role": "button", "name": "Load quotes"}})
+    released = rename_text("click[button:Load quotes]", project.state.gate)
+    assert released != "click[button:Load quotes]"  # the real name is in the action's name
+    session = project.verifier().open_original(None)
+    try:
+        assert session.run([released], use_cache=False)[0][-1] != "NA"
+    finally:
+        session.close()
