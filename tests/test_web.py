@@ -775,3 +775,36 @@ def test_live_outputs_are_discovered_and_need_a_field_probe_without_submit(tmp_p
         assert project.coverage("form", record_unknowns=False)["counts"]["live output textbox:Width"] >= 3
     finally:
         local.close()
+
+
+def test_coverage_lists_data_states_of_named_lists():
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "site"
+        root.mkdir()
+        (root / "loans.html").write_text(
+            '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>V</title></head><body><main>'
+            '<h1>Summary</h1><div id="out"></div><button id="r">Record return</button><script>'
+            'let loans=["SF-4","SF-7"];const show=()=>{document.getElementById("out").innerHTML = loans.length ?'
+            ' "<ul aria-label=\'On loan\'>" + loans.map(x=>"<li>"+x+"</li>").join("") + "</ul>"'
+            ' : "<p>Nothing is on loan.</p>";};show();'
+            'document.getElementById("r").onclick=()=>{loans.pop();show();};</script></main></body></html>')
+        local = LocalSite(root)
+        try:
+            project = Project(Path(tmp) / "p")
+            project.open_target("web:" + local.url("loans.html"), purpose="research")
+            project.define_actions({"ret": {"op": "click", "role": "button", "name": "Record return"}})
+            project.check_rules("vault", [{"statement": "The summary lists what is on loan.", "checks": [
+                {"kind": "outcome", "a": {"actions": ["ret", "ret", "ret"]}, "expect": {"title": "V"}}]},
+                {"statement": "Two loans to start with.", "checks": [
+                    {"kind": "outcome", "a": {"actions": ["ret"]}, "expect": {"title": "V"}}]}], workers=1)
+            uncovered = project.coverage("vault", record_unknowns=False)["uncovered"]
+            assert "data state: list On loan: several" in uncovered  # only one-left and none were recorded
+            assert "data state: list On loan: one" not in uncovered
+            assert "data state: list On loan: none" not in uncovered  # the list gave way to a message
+            hint = next(s for s in project.suggest_probes("vault") if s["item"].startswith("data state: list"))
+            assert hint["list"] == "On loan" and "`outline`" in hint["suggest"]
+        finally:
+            local.close()

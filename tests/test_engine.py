@@ -110,3 +110,18 @@ def test_server_side_refusals_are_told_apart_from_acceptance():
                     "network": ["POST /api/specimens/{id}/quarantine 200"]}):
         assert refused(outcome({"path": "/specimens/SF-1", **signal}))  # each signal alone is a refusal
     assert not refused(good)
+
+
+def test_length_bounds_find_a_minimum_before_the_maximum():
+    import json
+
+    from teardown.engine.fieldprobe import length_bounds, outcome
+
+    def field(lo: int, hi: int):
+        return lambda value: json.dumps({"text": ["ok" if lo <= len(value) <= hi else "no"]})
+
+    reference = outcome({"text": ["ok"]})
+    assert length_bounds(field(5, 200), "text", reference) == (5, 200)  # 3 refused: a minimum, not "no limit"
+    assert length_bounds(field(1, 40), "text", reference) == (None, 40)
+    assert length_bounds(field(1, 10 ** 6), "text", reference) == (None, None)
+    assert length_bounds(field(5000, 6000), "text", reference) == (None, None)  # nothing accepted up to 4096

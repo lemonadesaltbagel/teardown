@@ -262,28 +262,52 @@ def accepted(symbol: str, reference: dict[str, Any], accept=None, keys: tuple[st
 
 def length_boundary(probe_once: Callable[[str], str], kind: str, reference: dict[str, Any], *,
                     hi: int = 4096, accept=None, keys: tuple[str, ...] = OUTCOME_KEYS) -> int | None:
-    """Largest accepted length (exponential then binary search). None if even a short value is refused, or if
-    nothing up to ``hi`` is refused (no limit observed)."""
+    """Largest accepted length; see ``length_bounds``."""
+    return length_bounds(probe_once, kind, reference, hi=hi, accept=accept, keys=keys)[1]
+
+
+def length_bounds(probe_once: Callable[[str], str], kind: str, reference: dict[str, Any], *,
+                  hi: int = 4096, accept=None, keys: tuple[str, ...] = OUTCOME_KEYS) -> tuple[int | None, int | None]:
+    """(smallest, largest) accepted length, by exponential then binary search. The smallest is None when the
+    shortest length tried is accepted; the largest is None when nothing up to ``hi`` is refused (no limit
+    observed). Both are None when no length up to ``hi`` is accepted."""
     import functools
 
     accepted_ = functools.partial(accepted, accept=accept, keys=keys)
+
+    def ok(n: int) -> bool:
+        return accepted_(probe_once(v := value_for_length(kind, n)), reference, echo=v)
+
     # start where echo masking applies (3+ characters): a shorter typed value shown back would not be masked
     lo = 3 if kind != "email" else len("a@example.com")
-    if not accepted_(probe_once(v := value_for_length(kind, lo)), reference, echo=v):
-        return None
+    shortest = None
+    if not ok(lo):  # a minimum length: find the first accepted length above it
+        n = lo
+        while n < hi and not ok(n * 2):
+            n *= 2
+        if n >= hi:
+            return None, None
+        bad, good = n, min(n * 2, hi)
+        while good - bad > 1:
+            mid = (good + bad) // 2
+            if ok(mid):
+                good = mid
+            else:
+                bad = mid
+        shortest = lo = good
     n = lo
-    while n < hi and accepted_(probe_once(v := value_for_length(kind, n * 2)), reference, echo=v):
+    while n < hi and ok(n * 2):
         n *= 2
     if n >= hi:
-        return None
+        return shortest, None
     good, bad = n, min(n * 2, hi)
     while bad - good > 1:
         mid = (good + bad) // 2
-        if accepted_(probe_once(v := value_for_length(kind, mid)), reference, echo=v):
+        if ok(mid):
             good = mid
         else:
             bad = mid
-    return good
+    return shortest, good
 
 
 def outcome_json(symbol: str, echo: str | None = None) -> str:

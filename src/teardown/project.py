@@ -194,6 +194,24 @@ def fault_class(f: dict[str, Any]) -> str | None:
     return {"abort": "network", "timeout": "network", "hang": None, "malformed": "malformed"}.get(mode)
 
 
+def _named_lists(outline: list[str]) -> dict[str, int]:
+    """Named lists in a web.aria/v8 outline -> how many items each holds."""
+    out: dict[str, int] = {}
+    for i, line in enumerate(outline):
+        m = re.match(r'^( *)list "(.+)"', line)
+        if not m:
+            continue
+        depth = len(m[1])
+        n = 0
+        for child in outline[i + 1:]:
+            indent = len(child) - len(child.lstrip(" "))
+            if indent <= depth:
+                break
+            n += indent == depth + 2 and child.lstrip().startswith("listitem")
+        out[m[2]] = n
+    return out
+
+
 class Project:
     def __init__(self, root: str | Path):
         self.root = Path(root)
@@ -997,14 +1015,18 @@ class Project:
                             "suggest": "typing here changes the screen without a click (a preview, total or "
                                        "counter): probe it without submit so empty, out-of-range and malformed "
                                        "values are recorded, then state the rule"})
-            elif item.startswith("data state: table "):
-                name, state = item[len("data state: table "):].rsplit(": ", 1)
-                how = {"none": "filter or search so that nothing matches (or use an account with no records)",
-                       "one": "filter or search so that exactly one record remains (watch singular wording)",
-                       "several": "show the list with two or more records"}[state]
-                out.append({"item": item, "kind": "data-state", "table": name, "state": state,
-                            "suggest": f"{how}, then state a rule with an outcome check on `tables` (and the "
-                                       "count or empty-state text)"})
+            elif item.startswith(("data state: table ", "data state: list ")):
+                kind_of = "table" if item.startswith("data state: table ") else "list"
+                name, state = item[len(f"data state: {kind_of} "):].rsplit(": ", 1)
+                how = {"none": "filter, search or change the data so that nothing is listed (or use an account "
+                               "with no records)",
+                       "one": "filter, search or change the data so that exactly one entry remains (watch singular "
+                              "wording)",
+                       "several": "show it with two or more entries"}[state]
+                key = "`tables`" if kind_of == "table" else "`outline` / `text`"
+                out.append({"item": item, "kind": "data-state", kind_of: name, "state": state,
+                            "suggest": f"{how}, then state a rule with an outcome check on {key} (and the count or "
+                                       "empty-state text)"})
             elif item.startswith("session expiry"):
                 out.append({"item": item, "kind": "session",
                             "action": {"op": "fault", "fault": {"path": "/**", "mode": "status", "status": 401}},
@@ -1058,6 +1080,19 @@ class Project:
                 seen[name].add("none")
         counts = {f"data state: table {name}: {state}": int(state in states)
                   for name, states in seen.items() for state in ("none", "one", "several")}
+        # named lists (web.aria/v8 outline): the same three states
+        lists: dict[str, set[str]] = {}
+        list_routes: dict[str, set[str]] = {}
+        for sym in symbols:
+            for name, n in _named_lists(sym.get("outline") or []).items():
+                lists.setdefault(name, set()).add("none" if n == 0 else "one" if n == 1 else "several")
+                list_routes.setdefault(name, set()).add(route_template(sym.get("path") or ""))
+        for name, rts in list_routes.items():
+            if any(route_template(sym.get("path") or "") in rts and sym.get("outline")
+                   and name not in _named_lists(sym["outline"]) for sym in symbols):
+                lists[name].add("none")
+        counts.update({f"data state: list {name}: {state}": int(state in states)
+                       for name, states in lists.items() for state in ("none", "one", "several")})
         named = self.action_table()
         signs_in = any((a.get("op") == "fill" or a.get("action") == "fill")
                        and "password" in (a.get("name") or "").lower() for a in named.values())
@@ -1276,7 +1311,7 @@ class Project:
 
         actions = dict(fill_action(c, v) for c, v in values.items())
         self.define_actions(actions)
-        boundary_found = None
+        boundary_found = shortest = None
         if boundary and valid:
             session = self._worker_session()
             try:
@@ -1292,7 +1327,7 @@ class Project:
                     typed = session.step(act_name, params=spec)[1]
                     return session.step(submit)[1] if submit else typed
 
-                boundary_found = fp.length_boundary(probe_once, kind, reference, accept=accept, keys=keys)
+                shortest, boundary_found = fp.length_bounds(probe_once, kind, reference, accept=accept, keys=keys)
             finally:
                 session.close()
             if boundary_found is not None:
@@ -1302,6 +1337,13 @@ class Project:
                 actions.update(extra)
                 values["len_at_max"] = extra[f"fill[{name}]=len_at_max"]["value"]
                 values["len_over_max"] = extra[f"fill[{name}]=len_over_max"]["value"]
+            if shortest is not None:  # a minimum length too
+                extra = dict([fill_action("len_at_min", fp.value_for_length(kind, shortest)),
+                              fill_action("len_under_min", fp.value_for_length(kind, shortest - 1))])
+                self.define_actions(extra)
+                actions.update(extra)
+                values["len_at_min"] = extra[f"fill[{name}]=len_at_min"]["value"]
+                values["len_under_min"] = extra[f"fill[{name}]=len_under_min"]["value"]
         probes = [fp.SequenceProbe(id=f"{feature}:{name}={cls}",
                                    inputs=[*prefix, f"fill[{name}]={cls}", *([submit] if submit else [])],
                                    tags=["s:field", f"field:{name}", f"val:{kind}.{cls}"]) for cls in values]
@@ -1356,11 +1398,14 @@ class Project:
             self.ledger.record_unknown(feature, f"no length limit observed for field '{name}' up to 4096 characters "
                                        "(or no accepted reference)", ["probe longer values", "check server limits"])
         summary = {"feature": feature, "field": name, "classes": len(values), "boundary": boundary_found,
+                   "min_length": shortest,
                    "claims": len(mined), "nondeterministic": len(nondet)}
         self.audit.append("field-probe", {"table": table.id}, summary)
-        return {"table": table.id, "classes": len(values), "boundary": boundary_found, "claims": len(mined),
+        return {"table": table.id, "classes": len(values), "boundary": boundary_found, "min_length": shortest,
+                "claims": len(mined),
                 "mixed": len(mixed), "nondeterministic": sorted(nondet),
-                "boundary_actions": [a for a in actions if a.endswith(("=len_at_max", "=len_over_max"))]}
+                "boundary_actions": [a for a in actions if a.endswith(("=len_at_max", "=len_over_max",
+                                                                         "=len_at_min", "=len_under_min"))]}
 
     # -- clean-side channels -----------------------------------------------------------------------------------
     def verifier(self) -> Verifier:

@@ -170,9 +170,9 @@ def test_strict_web_loop_one_developer(tmp_path, monkeypatch):
         assert code == 0, out
         # a rules-only draft: the reviewer must still see the coverage gap that release checks
         assert json.loads(_cli("review", "--project", str(project_dir), "--feature", "quotes", "--json").stdout)[
-            "coverage_unacknowledged"] == ["fault GET /quotes.json malformed"]
+            "coverage_unacknowledged"] == ["data state: list Quotes: one", "fault GET /quotes.json malformed"]
         code, out = _at_terminal("approve", "--project", str(project_dir), "--feature", "quotes", "--by",
-                                 "dev@example.com", "--coverage", "--note", "malformed replies out of scope")
+                                 "dev@example.com", "--coverage", "--note", "one-quote and malformed states out of scope")
         assert code == 0, out
         final = json.loads(_cli("review", "--project", str(project_dir), "--feature", "quotes", "--json").stdout)
         assert final["unapproved"] == 0 and not final.get("coverage_unacknowledged")
