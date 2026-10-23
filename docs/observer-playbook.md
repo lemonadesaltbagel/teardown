@@ -55,6 +55,12 @@ State them in your own words, with checks:
   in a field; whether filters and searches react while you type or only when you submit.
 - **Every route, including the unhappy ones:** a missing record's page, empty results, and pages that a role
   may not see. Use `goto` with a made-up id.
+- **Data states:** every list with no rows, exactly one row (singular wording such as "1 item"), and several.
+  Coverage lists these per table.
+- **Sessions:** what a signed-in user sees when a request comes back 401 (an expired session): the message,
+  and where they are sent.
+- **Roles:** sign in as each role on the same pages and compare which controls exist (`same`/`differs` on
+  `controls`).
 
 Prefer `same`/`differs` checks for relations and `outcome` checks with small subsets for facts.
 

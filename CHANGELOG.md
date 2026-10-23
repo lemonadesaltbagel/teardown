@@ -37,6 +37,10 @@
 - Releases need coverage gaps exercised, explained or accepted with a reason; strict mode gates every draft on
   measured coverage.
 - Fourth held-out web result, Scionry: 121/130 with `v4` (`research/18`).
+- `web.aria/v5`: CSS-generated text (`generated`).
+- Coverage lists data states per table (none, one, several) and session expiry for apps with a sign-in.
+- Fifth held-out web result, Wickward: 114/127 with `v5` (`research/19`).
+- Nested subset expectations need their keys; `fault {mode: clear}` removes injected faults.
 - Field probes read status messages and mask echoes in the length search; generated unknowns are interface
   findings.
 - Table-row links count as one representative per table in discovery and coverage. API paths fold id

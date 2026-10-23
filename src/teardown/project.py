@@ -132,7 +132,7 @@ def default_mapper(target_spec: str, target: str) -> MapperVersion:
     if target_spec.startswith("cli:"):
         return MapperVersion(target=target, builtin="cli.behavior/v1", note="CLI behavior-level abstraction")
     if target_spec.startswith("web:"):
-        return MapperVersion(target=target, builtin="web.aria/v4", note="structured accessibility snapshot")
+        return MapperVersion(target=target, builtin="web.aria/v5", note="structured accessibility snapshot")
     if target_spec.startswith("desktop:"):
         return MapperVersion(target=target, builtin="desktop.a11y/v1", note="structured AT-SPI snapshot")
     if target_spec.startswith("android:"):
@@ -825,6 +825,7 @@ class Project:
                   for item, patterns in items.items()}
         if state.target_spec.startswith("web:"):
             counts.update(self._fault_coverage(feature, table))
+            counts.update(self._data_state_coverage(feature, table))
         if not state.target_spec.startswith("cli:"):
             counts.update(self._ui_coverage(feature, table))
         items.update({k: [] for k in counts if k not in items})
@@ -961,6 +962,19 @@ class Project:
                                      "prefix": (screen or {}).get("via", []),
                                      "submit": f"click[{submit}]" if submit else None},
                             "suggest": "check prefix/submit (submit may need other fields filled first via prefix)"})
+            elif item.startswith("data state: table "):
+                name, state = item[len("data state: table "):].rsplit(": ", 1)
+                how = {"none": "filter or search so that nothing matches (or use an account with no records)",
+                       "one": "filter or search so that exactly one record remains (watch singular wording)",
+                       "several": "show the list with two or more records"}[state]
+                out.append({"item": item, "kind": "data-state", "table": name, "state": state,
+                            "suggest": f"{how}, then state a rule with an outcome check on `tables` (and the "
+                                       "count or empty-state text)"})
+            elif item.startswith("session expiry"):
+                out.append({"item": item, "kind": "session",
+                            "action": {"op": "fault", "fault": {"path": "/**", "mode": "status", "status": 401}},
+                            "suggest": "sign in, add this fault, then navigate or submit: state what the UI shows "
+                                       "and where it sends the user (narrow the path to the app's API)"})
             elif item.startswith("control "):
                 control = item.split(" ", 1)[1]
                 screen = screen_with("clickable", control)
@@ -973,6 +987,51 @@ class Project:
             if len(out) >= limit:
                 break
         return out
+
+    def _recorded_symbols(self, feature: str, table: Any) -> list[dict[str, Any]]:
+        """Symbols the spec records: rule-check observations and probe-row expectations."""
+        from teardown.engine.rules import RuleTable
+
+        raw: list[str] = [r.expect for r in (table.rows if table else []) if isinstance(r.expect, str)]
+        if feature in self.state.rules:
+            for rule in self.workspace.get(self.state.rules[feature], RuleTable).rules:
+                raw += [s for c in rule.checks for s in (c.observed_a, c.observed_b) if s]
+        out = []
+        for s in raw:
+            value = describe_symbol(s)
+            if isinstance(value, dict):
+                out.append(value)
+        return out
+
+    def _data_state_coverage(self, feature: str, table: Any) -> dict[str, int]:
+        """Web: every table the spec shows, in the data states lists have: no rows (the table empty, or absent from
+        its route), exactly one row (singular wording), several rows. Plus, for apps with a sign-in, a session
+        that expires (a signed-in request answered 401). Counted from what rules and probes recorded."""
+        from teardown.engine.discovery import route_template
+
+        symbols = self._recorded_symbols(feature, table)
+        seen: dict[str, set[str]] = {}
+        routes: dict[str, set[str]] = {}
+        for sym in symbols:
+            for name, data in (sym.get("tables") or {}).items():
+                n = len(data.get("rows", []))
+                seen.setdefault(name, set()).add("none" if n == 0 else "one" if n == 1 else "several")
+                routes.setdefault(name, set()).add(route_template(sym.get("path") or ""))
+        for name, rts in routes.items():  # an empty list often replaces the table with an empty-state message
+            if any(route_template(sym.get("path") or "") in rts and name not in (sym.get("tables") or {})
+                   for sym in symbols):
+                seen[name].add("none")
+        counts = {f"data state: table {name}: {state}": int(state in states)
+                  for name, states in seen.items() for state in ("none", "one", "several")}
+        named = self.action_table()
+        signs_in = any((a.get("op") == "fill" or a.get("action") == "fill")
+                       and "password" in (a.get("name") or "").lower() for a in named.values())
+        if signs_in:
+            used = {n for seq in self._used_sequences(feature, table) for n in seq}
+            counts["session expiry: a signed-in request answered 401"] = sum(
+                1 for n in used if named.get(n, {}).get("op") == "fault"
+                and str((named[n].get("fault") or {}).get("status")) == "401")
+        return counts
 
     FAULT_CLASSES = {"5xx": "a server error", "network": "a network failure or timeout",
                      "malformed": "a malformed body"}

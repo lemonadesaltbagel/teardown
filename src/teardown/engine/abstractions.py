@@ -250,6 +250,8 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
         out["contract"] = dict(sorted(observation["contract"].items()))
     if version >= 4 and observation.get("landmarks"):  # landmark text as text assertions read it
         out["landmarks"] = dict(sorted(observation["landmarks"].items()))
+    if version >= 5 and observation.get("generated"):  # CSS-inserted text: "before|element text|after"
+        out["generated"] = list(observation["generated"])
     if version >= 2:  # what the accessibility snapshot leaves out
         if observation.get("title"):
             out["title"] = observation["title"]
@@ -284,6 +286,9 @@ BUILTINS["web.aria/v3"] = lambda observation, params: web_aria(observation, para
 # v4: `landmarks` — banner, contentinfo, navigation, complementary, search and named regions/forms, each with its
 # text as text assertions read it (whitespace-collapsed textContent: inline joins kept, block splits visible).
 BUILTINS["web.aria/v4"] = lambda observation, params: web_aria(observation, params, version=4)
+# v5: `generated` — text CSS inserts with ::before/::after (icons, separators), which accessible names include
+# and element text does not; a clone writing it literally into the DOM differs from one generating it.
+BUILTINS["web.aria/v5"] = lambda observation, params: web_aria(observation, params, version=5)
 
 
 # -- desktop -----------------------------------------------------------------------------------------------------
@@ -381,6 +386,8 @@ KNOWN_KEYS = {
                     "focus", "status", "dialogs", "options", "tables", "definitions"},
     "web.aria/v4": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract", "title",
                     "focus", "status", "dialogs", "options", "tables", "definitions", "landmarks"},
+    "web.aria/v5": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract", "title",
+                    "focus", "status", "dialogs", "options", "tables", "definitions", "landmarks", "generated"},
     "desktop.a11y/v1": {"windows", "controls", "text", "items"},
     "android.a11y/v1": {"controls", "text", "system"},
 }

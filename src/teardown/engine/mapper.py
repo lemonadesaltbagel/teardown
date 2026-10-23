@@ -116,16 +116,17 @@ def symbol_matches(observed: str, expected: str | None, match: str = "exact") ->
     return _subset(want, got)
 
 
-def _subset(want: dict, got: dict) -> bool:
+def _subset(want: dict, got: dict, top: bool = True) -> bool:
     """Every expected key matches; nested objects (e.g. ``controls``) are subsets too, so an expectation can name
-    one control without listing all of them. An expected empty list also matches an absent key (abstractions omit
-    empty collections)."""
+    one control without listing all of them. At the top level an expected empty list or null also matches an
+    absent key (abstractions omit empty collections); inside a nested object an expected key must exist (a
+    control expected with no flags, ``"button:Save": []``, is a control that is there)."""
     for k, v in want.items():
         if k not in got:
-            if v != [] and v is not None:  # abstractions omit empty collections and absent values
+            if not top or (v != [] and v is not None):
                 return False
         elif isinstance(v, dict) and isinstance(got[k], dict):
-            if not _subset(v, got[k]):
+            if not _subset(v, got[k], top=False):
                 return False
         elif got[k] != v:
             return False

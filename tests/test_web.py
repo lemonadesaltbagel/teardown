@@ -40,7 +40,7 @@ def test_driver_observes_behavior_tier_only(site):
     try:
         obs = d.reset()
         assert set(obs) == {"path", "aria", "form", "network", "api_shapes", "title", "focus", "current",
-                            "landmarks"}
+                            "landmarks", "generated"}
         assert "<script" not in json.dumps(obs)
         assert web_aria(obs, {})["headings"] == ["Your email"]
         assert d.step(_act(op="click", role="button", name="Nope")) is None  # absent -> NA
@@ -553,3 +553,93 @@ def test_field_probe_reads_refusals_shown_only_as_status_messages(tmp_path):
         assert result["boundary"] == 20
     finally:
         local.close()
+
+
+def test_web_aria_v5_tells_css_generated_icons_from_literal_ones(tmp_path):
+    from teardown.engine.abstractions import BUILTINS
+
+    root = tmp_path / "site"
+    root.mkdir()
+    head = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>T</title>'
+    (root / "css.html").write_text(head + '<style>.warn::before{content:"\\26A0\\FE0E "}</style></head><body>'
+                                   '<table aria-label="Grafts"><tr><td class="warn">Needs partner</td></tr></table>'
+                                   '</body></html>')
+    (root / "literal.html").write_text(head + '</head><body><table aria-label="Grafts"><tr><td>\u26a0\ufe0e Needs '
+                                       'partner</td></tr></table></body></html>')
+    local = LocalSite(root)
+    try:
+        symbols = {}
+        for page in ("css", "literal"):
+            d = WebDriver("web:" + local.url(f"{page}.html"))
+            try:
+                symbols[page] = BUILTINS["web.aria/v5"](d.reset(), {})
+            finally:
+                d.close()
+        assert symbols["css"]["generated"] == ["\u26a0\ufe0e|Needs partner|"]  # the space ends the CSS escape
+        assert "generated" not in symbols["literal"]  # same accessible name, different page: conformance sees it
+    finally:
+        local.close()
+
+
+def test_coverage_lists_data_states_and_session_expiry_until_observed(tmp_path):
+    root = tmp_path / "site"
+    root.mkdir()
+    (root / "list.html").write_text(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>L</title></head><body><main>'
+        '<label>Password <input type="password"></label><label>Search <input id="q"></label>'
+        '<button id="go">Search</button><div id="out"></div><script>'
+        'const all=["Bramley","Pippin","Russet"];document.getElementById("go").onclick=()=>{'
+        'const q=document.getElementById("q").value;const hits=all.filter(x=>x.includes(q));'
+        'document.getElementById("out").innerHTML = hits.length ? "<table aria-label=\'Grafts\'>" + '
+        'hits.map(h=>"<tr><td>"+h+"</td></tr>").join("") + "</table>" : "<p>No grafts match.</p>";};'
+        '</script></main></body></html>')
+    local = LocalSite(root)
+    try:
+        project = Project(tmp_path / "p")
+        project.open_target("web:" + local.url("list.html"), purpose="research")
+        project.define_actions({"pw": {"op": "fill", "role": "textbox", "name": "Password", "value": "x"},
+                                "q_all": {"op": "fill", "role": "textbox", "name": "Search", "value": ""},
+                                "q_one": {"op": "fill", "role": "textbox", "name": "Search", "value": "Pip"},
+                                "q_none": {"op": "fill", "role": "textbox", "name": "Search", "value": "zzz"},
+                                "go": {"op": "click", "role": "button", "name": "Search"}})
+        rule = {"statement": "Searching lists every graft.", "checks": [
+            {"kind": "outcome", "a": {"actions": ["q_all", "go"]}, "expect": {"title": "L"}}]}
+        project.check_rules("grafts", [rule], workers=1)
+        report = project.coverage("grafts", record_unknowns=False)
+        assert {"data state: table Grafts: none", "data state: table Grafts: one",
+                "session expiry: a signed-in request answered 401"} <= set(report["uncovered"])
+        assert "data state: table Grafts: several" not in report["uncovered"]
+        kinds = {s["kind"] for s in project.suggest_probes("grafts", limit=50)}
+        assert {"data-state", "session"} <= kinds
+        project.check_rules("grafts", [
+            {"statement": "One match lists one graft.", "checks": [
+                {"kind": "outcome", "a": {"actions": ["q_one", "go"]}, "expect": {"title": "L"}}]},
+            {"statement": "No match shows a message.", "checks": [
+                {"kind": "outcome", "a": {"actions": ["q_none", "go"]}, "expect": {"title": "L"}}]}], workers=1)
+        report = project.coverage("grafts", record_unknowns=False)
+        assert not {i for i in report["uncovered"] if i.startswith("data state:")}
+    finally:
+        local.close()
+
+
+def test_nested_expectations_need_their_keys_and_faults_can_be_cleared(site):
+    import json as _json
+
+    from teardown.engine.mapper import symbol_matches
+
+    observed = _json.dumps({"controls": {"button:Save": []}})
+    assert symbol_matches(observed, _json.dumps({"controls": {"button:Save": []}}), "subset")
+    assert not symbol_matches(observed, _json.dumps({"controls": {"button:Imaginary": []}}), "subset")
+    assert symbol_matches(observed, _json.dumps({"alerts": []}), "subset")  # top level: absent means empty
+    assert symbol_matches(_json.dumps("NA"), _json.dumps({"value": "NA"}), "subset")
+
+    d = WebDriver("web:" + site.url("fetcher.html"))
+    try:
+        load = _act(op="click", role="button", name="Load quotes")
+        d.reset()
+        d.step(_act(op="fault", fault={"path": "/quotes.json", "mode": "status", "status": 503}))
+        assert web_aria(d.step(load), {}).get("alerts") == ["Server error 503"]
+        d.step(_act(op="fault", fault={"mode": "clear"}))
+        assert web_aria(d.step(load), {})["network"] == ["GET /quotes.json?page=1 200"]
+    finally:
+        d.close()

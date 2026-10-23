@@ -108,8 +108,8 @@ p.api_contract()                                                       # value-f
   - **Same-named controls** (a page button and a dialog's confirm button): `within: {"role": "dialog",
     "name": ...}` scopes the lookup, and `nth` picks one among several matches.
   - **Outcomes:** a missing element, or one a user could not act on, makes the step `NA`; a disabled one makes
-    it `DISABLED`.
-- **A symbol is the structured accessibility view** (`web.aria/v4`, the default for new projects):
+    it `DISABLED`. An outcome check expects these as `{"value": "NA"}` / `{"value": "DISABLED"}`.
+- **A symbol is the structured accessibility view** (`web.aria/v5`, the default for new projects):
   - `path`, `title`, `headings`, `alerts`;
   - `status` (live-region messages such as "Saved.");
   - `text`;
@@ -122,10 +122,12 @@ p.api_contract()                                                       # value-f
   - `network` (API method, path template, status);
   - `landmarks`: the banner, footer, navigation, complementary, search, and named regions/forms, each with its
     text as a text assertion reads it (inline text joins with spaces, blocks do not), so layout that splits or
-    joins text is visible.
+    joins text is visible;
+  - `generated`: text CSS inserts with `::before`/`::after` (icons, separators), one `before|text|after` entry
+    per element. Accessible names include it; element text does not.
 
   Projects keep the version they were created with (`v1`: no title, focus, status or tables; `v2`: table cells
-  flattened into `text`; `v3`: no landmarks).
+  flattened into `text`; `v3`: no landmarks; `v4`: no `generated`).
 - Rules on UIs compare **sequences**: `{"actions": [...]}` on each side; restrict `keys` to what the rule is about
   (`controls`, `path`, `alerts`, `network`) so incidental text does not break the relation.
 - Field probes find length limits and classify refusals as client-side (submit disabled / no request) or
@@ -139,11 +141,13 @@ p.api_contract()                                                       # value-f
 - Inventory for `coverage`: pages/routes, every form and field, every button/link action, every API endpoint.
 - **Fault injection** (error handling is invisible on a healthy backend): an action
   `{"op": "fault", "fault": {"path": "/api/articles/*", "mode": "status|abort|timeout|malformed", "status": 500}}`
+  (`{"mode": "clear"}` removes the faults installed so far, e.g. to sign in again after an injected 401)
   (`*` stays within one path segment: that pattern hits an article but not its comments; `**` crosses segments)
   makes matching API calls *as received by the observing browser* fail for the rest of the episode; put it before
   the steps that trigger the call and state rules about what the UI then shows. Cover every important endpoint with
   5xx, network failure and malformed-body probes. The server is never touched. `coverage` lists every observed
-  endpoint × fault class (5xx, network, malformed) automatically. An item counts as covered only when a probe or
+  endpoint × fault class (5xx, network, malformed) automatically, plus each table's data states (none, one,
+  several) and, for apps with a sign-in, session expiry (a 401 fault). An item counts as covered only when a probe or
   rule sequence actually injects that fault there, and uncovered items become unknowns.
 - **Pending states**: `"mode": "hang"` holds matching calls unanswered, so the next observation shows the loading
   UI (placeholders, disabled buttons). A later `{"op": "fault", "fault": {"mode": "release", "then":

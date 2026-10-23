@@ -53,7 +53,8 @@ class WebAction(BaseModel):
                                   "mode: status|abort|timeout|malformed|hang, "
                                   "status: int, method: optional}. Applies to the rest of the episode. 'hang' holds "
                                   "matching requests pending (loading states become observable) until a later "
-                                  "{mode: release, then: continue|abort|timeout|status, status: int}.")
+                                  "{mode: release, then: continue|abort|timeout|status, status: int}. "
+                                  "{mode: clear} removes every fault installed so far in the episode.")
 
 
 # Read-only probe of the constraint-validation API: the shipped UI contract, not application code.
@@ -125,6 +126,27 @@ _LANDMARK_PROBE = """() => {
     out[key] = el.textContent.replace(/\\s+/g, ' ').trim();
   }
   return out;
+}"""
+
+# Text that CSS inserts (::before / ::after string content): part of what the user sees and of accessible names,
+# but not of the element's own text. One "before|text|after" entry per visible element, capped.
+_GENERATED_PROBE = """() => {
+  const strings = c => {
+    if (!c || c === 'none' || c === 'normal') return '';
+    const quoted = c.match(/"((?:[^"\\\\]|\\\\.)*)"/g);
+    return quoted ? quoted.map(s => s.slice(1, -1).replace(/\\\\(.)/g, '$1')).join('') : '';
+  };
+  const out = new Set();
+  for (const el of document.querySelectorAll('body *')) {
+    const before = strings(getComputedStyle(el, '::before').content);
+    const after = strings(getComputedStyle(el, '::after').content);
+    if (!before.trim() && !after.trim()) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) continue;
+    out.add(before + '|' + el.textContent.replace(/\\s+/g, ' ').trim().slice(0, 60) + '|' + after);
+    if (out.size >= 60) break;
+  }
+  return Array.from(out).sort();
 }"""
 
 _SEED_RANDOM = """(() => {
@@ -298,6 +320,7 @@ class WebDriver(Driver):
         self.contract = self._contract_list(contract_selectors)
         self._held: list[Any] = []
         self._hang_handlers: list[Any] = []
+        self._fault_handlers: list[Any] = []
         self._allowed: set[str] | None = None  # hosts the context gate lets through (None: no gate)
         self.blocked: set[tuple[str, str]] = set()  # (host, resource type) the gate refused, across episodes
         self._ctx = None
@@ -378,7 +401,7 @@ class WebDriver(Driver):
             self._ctx.route("**/*", gate)
         self.page = self._ctx.new_page()
         self._inflight = 0
-        self._held, self._hang_handlers = [], []
+        self._held, self._hang_handlers, self._fault_handlers = [], [], []
         self._requests_since_observe = 1  # the initial navigation always settles
 
         self._exchanges: list[dict[str, Any]] = []
@@ -497,6 +520,12 @@ class WebDriver(Driver):
         pattern, mode = fault.get("path", "**"), fault.get("mode", "status")
         matches = path_glob(pattern)
         method = (fault.get("method") or "").upper()
+        if mode == "clear":  # remove every injected fault (held requests are aborted first)
+            self._drop_held()
+            for installed in self._fault_handlers:
+                self.page.unroute("**/*", installed)
+            self._fault_handlers, self._hang_handlers = [], []
+            return
         if mode == "release":
             self._release(fault)
             return
@@ -526,6 +555,7 @@ class WebDriver(Driver):
                                  body=json.dumps(fault.get("body", {"errors": {"body": ["injected"]}})))
 
         self.page.route("**/*", handler)
+        self._fault_handlers.append(handler)
         if mode == "hang":
             self._hang_handlers.append(handler)
 
@@ -588,6 +618,7 @@ class WebDriver(Driver):
             "title": self.page.title(),
             **self.page.evaluate(_STATE_PROBE),
             "landmarks": self.page.evaluate(_LANDMARK_PROBE),
+            "generated": self.page.evaluate(_GENERATED_PROBE),
         }
 
     def actions(self) -> list[str]:
