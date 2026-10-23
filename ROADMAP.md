@@ -109,7 +109,14 @@ novel tool with an independent observer agent: **spec arm 397/397**, hybrid (spe
   `profile.asset_hosts`), server-clock dates drifting across days (fixed: `mask_dates` + compile-time unknown).
 - [x] Conduit round 4 with `asset_hosts` + `mask_dates`: 99/101; conformance 576/576. The last 2 need DOM beyond
   the public contract.
-- [ ] Held-out web benchmark (an app with its own hidden E2E suite that the web tooling was not tuned on).
+- [x] Held-out web benchmark: seven novel apps, each with its own hidden Playwright suite, both sides confined,
+  tooling frozen per round: 53% → 56% → 81.5% → 93.1% → 89.8% → 87.5% → 99.2% (`research/15`–`21`).
+- [x] Versioned abstractions `web.aria/v1`–`v8`; released specs keep verifying under their version. `v8` comes
+  from an audit of what user-facing Playwright locators and assertions tell apart (39 pairs, plus 7 that must
+  stay identical; `teardown.drivers.web.surface`), not from one round's misses.
+- [x] Observer productivity: `discover_ui`, UI / endpoint × fault / data-state / session / live-output coverage,
+  `suggest_probes`, coverage-gated release, the playbook as an MCP prompt.
+- [ ] A second held-out round with `v8`, to separate the abstraction's effect from one app's difficulty.
 - [ ] CDP coverage for exploration steering; APE-style state-key refinement; HAR freeze for 3-way layering.
 - [ ] TodoMVC benchmark; SaaS limited-reset mode.
 - **Exit:** Conduit clone from a Teardown web spec + the public selectors contract, scored on the hidden E2E
@@ -134,6 +141,9 @@ novel tool with an independent observer agent: **spec arm 397/397**, hybrid (spe
 - [x] Observer room: the observer agent confined to the observe MCP server (HTTP) and a scratch workspace; the
   target is never in its egress allowlist (11 isolation probes). Round 6 with both sides confined: 93/101
   (`research/13`); its gaps led to automatic endpoint x fault coverage.
+- [x] Strict gate end to end: an automated test (observer over MCP/HTTP, approvals typed into a
+  pseudo-terminal), and a live held-out round where one person approved at their own terminal with three
+  class-level decisions (`research/21`).
 - [ ] Package registry mirror with a block list (for implementations that may use third-party packages).
 - [ ] MinHash, distinctiveness scoring, auto-built identifier denylist, advisory LLM judge, review UI.
 - [ ] Memorization probes and spec canaries; post-hoc similarity reports (Dolos/JPlag/PDQ); RFC 3161 checkpoints.
