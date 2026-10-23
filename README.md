@@ -129,7 +129,7 @@ teardown cleanroom down  --project P
 | Target | What Teardown observes | Faults it can inject | Requirements | Status |
 |---|---|---|---|---|
 | Command-line tools | Exit code, stdout, diagnostic presence and errno class, file effects | Closed/full stdio, unreadable files, read-only directories | Docker (isolated runner) or local | **Stable** |
-| Web apps | Route, title, headings, alerts, status messages, visible text, tables, description lists, landmarks, control states (including `aria-invalid`), named groups, focus, dialogs and descriptions, select options, API method/path/status, public-contract selectors | 5xx, network failure, timeout, malformed body, pending requests | Playwright Chromium; optional backend reset command | **Working**: 53% → 56% → 81.5% → 93.1% → 89.8% → 87.5% on six held-out apps (see Results) |
+| Web apps | Everything a user-facing Playwright locator or assertion can tell apart (the accessibility tree with roles, names, levels, states and nesting; field values and properties; titles, focus, status messages, landmarks text), plus API method/path/status and public-contract selectors | 5xx, network failure, timeout, malformed body, pending requests | Playwright Chromium; optional backend reset command | **Working**: 53% → 56% → 81.5% → 93.1% → 89.8% → 87.5% → 99.2% on seven held-out apps (see Results) |
 | Android apps | Controls by role and name with state flags, visible text, system dialogs | Network off (airplane mode) | Android SDK, emulator or device via `adb` | **Working** |
 | Linux desktop apps | AT-SPI tree: windows, controls, text, list items | — | Docker (Xvfb + AT-SPI container) | Experimental |
 | macOS, Windows, iOS | — | — | — | Not started |
@@ -157,7 +157,7 @@ benchmark with 118 hidden scenarios. A confined observer worked through MCP alon
 only the spec. The clone passes 113. The five misses are input-check orders and messages that were never probed.
 [Report](research/14-android-novel-confined.md)
 
-### Web apps no model has seen, held out: 53% → 56% → 81.5% → 93.1% → 89.8% → 87.5%
+### Web apps no model has seen, held out: 53% → 56% → 81.5% → 93.1% → 89.8% → 87.5% → 99.2%
 
 Kilnroll, a pottery-studio kiln logbook, was written for the benchmark with 120 hidden Playwright tests. Nothing
 was tuned on it, and the tooling was frozen before the run. The clone matched every observed behavior (224/224
@@ -186,6 +186,12 @@ the first call. Nothing failed for dialog roles, descriptions, empty submits, qu
 misses are row headers, `aria-invalid` and named groups, which `web.aria/v7` now records. Three more were
 observer gaps, two of them hidden by a fault-coverage bug that the observer itself reported (now fixed).
 [Report](research/20-held-out-web-fogline.md)
+
+A seventh held-out app (Strewnfield, 130 hidden tests) scored **129 with `v8`, under the strict gate**. `v8`
+was built from an audit of what a user-facing Playwright suite can tell apart, rather than from the previous
+round's misses. The observer could not approve. A person approved the release at their own terminal with
+three class-level decisions, and the audit log records each one. The only miss was an empty list's message
+the observer never produced. [Report](research/21-held-out-web-strewnfield-strict.md)
 
 ### RealWorld "Conduit" web frontend: 99/101
 

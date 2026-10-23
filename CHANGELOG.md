@@ -49,6 +49,12 @@
   reject undefined actions.
 - `web.aria/v6`: dialog roles and accessible descriptions.
 - Sixth held-out web result, Fogline: 112/128 with `v6` (`research/20`).
+- Seventh held-out web result, Strewnfield: 129/130 with `v8` under the strict gate, a person approving at a
+  terminal (`research/21`).
+- Field probes find a minimum length before the maximum, and count an API 4xx, a dialog left open or an
+  `aria-invalid` field as a refusal. Named lists get data-state coverage. An expected `{}` means none. Controls
+  whose clicks only came back `NA` are not covered. `click[role:name]` names define themselves. A repeated
+  `approve` says who already approved.
 - `web.aria/v8`, the default for new web projects: `outline` (the accessibility tree: roles, names, levels,
   states, nesting, counts) and `properties` (field values except passwords, required, readonly, masked, error
   message, sort state, progress values, title attributes). A surface audit
