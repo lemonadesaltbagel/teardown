@@ -103,17 +103,43 @@ def click_action(platform: str, role: str, name: str) -> tuple[str, dict[str, An
     return f"click[{role}:{name}]", {"action": "click", "role": role, "name": name}
 
 
+_STATUS_COLUMN = re.compile(r"\b(status|state|stage|condition)\b", re.IGNORECASE)
+
+
 def _row_links(symbol: Any) -> dict[str, list[str]]:
-    """Links whose names are table cell values: records, not features (web.aria/v3 tables)."""
+    """Links whose names are table cell values: records, not features (web.aria/v3 tables). In row order."""
+    return {name: [link for link, _ in rows] for name, rows in _row_records(symbol).items()}
+
+
+def _row_records(symbol: Any) -> dict[str, list[tuple[str, tuple[str, ...]]]]:
+    """Per table, each row's link with the row's values in status-like columns (Status, State, Stage,
+    Condition), so records in different states can each be explored."""
     tables = symbol.get("tables", {}) if isinstance(symbol, dict) else {}
     controls = _controls(symbol)
-    out: dict[str, list[str]] = {}
+    out: dict[str, list[tuple[str, tuple[str, ...]]]] = {}
     for name, data in tables.items():
-        cells = {c for row in data.get("rows", []) for c in row}
-        links = sorted(k for k in controls if k.startswith("link:") and split_control(k)[1] in cells)
-        if links:
-            out[name] = links
+        status_cols = [i for i, c in enumerate(data.get("columns") or []) if _STATUS_COLUMN.search(c or "")]
+        rows = []
+        for row in data.get("rows", []):
+            link = next((f"link:{c}" for c in row if f"link:{c}" in controls), None)
+            if link and link not in (r[0] for r in rows):
+                rows.append((link, tuple(row[i] for i in status_cols if i < len(row))))
+        if rows:
+            out[name] = rows
     return out
+
+
+def _representatives(symbol: Any, per_table: int = 4) -> set[str]:
+    """One row link per table, or one per distinct status when the table has a status column (up to
+    ``per_table``): a retired record's page may lack the forms an active one has."""
+    keep = set()
+    for rows in _row_records(symbol).values():
+        seen: set[tuple[str, ...]] = set()
+        for link, status in rows:
+            if status not in seen and len(seen) < per_table:
+                seen.add(status)
+                keep.add(link)
+    return keep
 
 
 _OUTPUT_KEYS = ("text", "status", "alerts", "tables", "definitions")
@@ -129,7 +155,7 @@ def summarize(symbol: Any) -> dict[str, Any]:
     controls = _controls(symbol)
     options = symbol.get("options", {}) if isinstance(symbol, dict) else {}
     rows = _row_links(symbol)
-    data_links = {k for links in rows.values() for k in links[1:]}  # keep one representative per table
+    data_links = {k for links in rows.values() for k in links} - _representatives(symbol)
     return {
         "options": {k: v for k, v in options.items()},
         "row_links": {t: len(v) for t, v in rows.items()},

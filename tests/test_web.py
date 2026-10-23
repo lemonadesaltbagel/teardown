@@ -495,7 +495,8 @@ def test_same_named_controls_null_expectations_purpose_errors_and_data_folding(t
     symbol = {"controls": {"link:Otter": [], "link:Heron": [], "link:Locks": []},
               "tables": {"Boats": {"columns": ["Name"], "rows": [["Otter"], ["Heron"]]}}}
     summary = summarize(symbol)
-    assert summary["clickable"] == ["link:Heron", "link:Locks"] and summary["row_links"] == {"Boats": 2}
+    # one representative per table: the first row as shown (no status column to tell records apart)
+    assert summary["clickable"] == ["link:Locks", "link:Otter"] and summary["row_links"] == {"Boats": 2}
 
 
 def test_web_aria_v4_landmark_text_tells_inline_from_block_splits(tmp_path):

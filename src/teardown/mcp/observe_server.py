@@ -269,7 +269,14 @@ def build_observe_server(project: Project) -> MCPServer:
     @server.tool(description="Retract one of your rules (e.g. superseded by a reworded version), with a reason. "
                  "Rule ids are in check_rules results.")
     def retract_rule(feature: str, rule_id: str, reason: str) -> dict[str, Any]:
-        return {"rules_left": project.retract_rule(feature, rule_id, reason)}
+        from collections import Counter
+
+        from teardown.engine.rules import RuleTable
+
+        left = project.retract_rule(feature, rule_id, reason)
+        table = project.workspace.get(project.state.rules[feature], RuleTable)
+        # every rule still in the table, by status: falsified and contested rules stay until retracted too
+        return {"rules_left": left, "by_status": dict(Counter(r.status for r in table.rules))}
 
     @server.tool(description="Mark an unknown resolved / out-of-scope / investigating (or reopen it) with a note. "
                  "Resolved unknowns leave the release; the audit log keeps the history.")

@@ -140,3 +140,17 @@ def test_a_probe_rows_outcome_matches_the_symbol_it_was_taken_from():
                          "controls": {"textbox:Title": ["filled", "invalid"], "button:Create": []},
                          "flagged": ["group:Slot"], "text": ["Enter a title of 3 to 80 characters."]})
     assert symbol_matches(symbol, outcome_json(symbol), "subset")
+
+
+def test_discovery_explores_one_record_per_status():
+    """A retired record's page can lack the forms an active one has: discovery keeps one row per status."""
+    from teardown.engine.discovery import summarize
+
+    symbol = {"path": "/birds", "controls": {"link:Ash": [], "link:Birch": [], "link:Cedar": [], "button:Add": []},
+              "tables": {"Birds": {"columns": ["Name", "Status"],
+                                   "rows": [["Ash", "Retired"], ["Birch", "Active"], ["Cedar", "Active"]]}}}
+    summary = summarize(symbol)
+    assert {"link:Ash", "link:Birch", "button:Add"} <= set(summary["clickable"])
+    assert "link:Cedar" not in summary["clickable"]
+    plain = {**symbol, "tables": {"Birds": {"columns": ["Name"], "rows": [["Ash"], ["Birch"], ["Cedar"]]}}}
+    assert [c for c in summarize(plain)["clickable"] if c.startswith("link:")] == ["link:Ash"]

@@ -23,6 +23,12 @@ p.coverage("<feature>", inventory)                   # what is still unexercised
 draft = p.compile_spec("<feature>"); p.review_spec(draft.id); p.release_spec(draft.id)
 ```
 
+Your own inventory items are `{item: [patterns]}`. An item counts as exercised when one of its patterns occurs
+in the name or the definition of an action that a probe or rule check actually runs (for a CLI, also in its
+argv or stdin), so write patterns as action names or the accessible names, values and paths they use
+(`"Notes"`, `"goto"`, `"/birds/new"`), not as prose. `ingest_docs` takes the text itself: pass the file's
+contents, not its path (the server cannot see your scratch directory).
+
 ### `hints` for `probe_cli` (all optional except `cmd`)
 
 | key | meaning |
