@@ -221,7 +221,8 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
                 out.setdefault("status", []).append((n["name"] or n["text"]).strip())
             continue
         if version >= 2 and role in ("dialog", "alertdialog"):
-            out.setdefault("dialogs", []).append(n["name"] or "")
+            # v6 keeps the role: an alertdialog (a confirmation) is not a dialog
+            out.setdefault("dialogs", []).append(f"{role}:{n['name'] or ''}" if version >= 6 else n["name"] or "")
         if version >= 2 and role == "option" and n["name"] is not None and combobox is not None:
             out.setdefault("options", {}).setdefault(combobox, []).append(
                 n["name"] + (" [selected]" if "selected" in n["attrs"] else ""))
@@ -252,6 +253,8 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
         out["landmarks"] = dict(sorted(observation["landmarks"].items()))
     if version >= 5 and observation.get("generated"):  # CSS-inserted text: "before|element text|after"
         out["generated"] = list(observation["generated"])
+    if version >= 6 and observation.get("descriptions"):  # aria-describedby / aria-description per control
+        out["descriptions"] = dict(sorted(observation["descriptions"].items()))
     if version >= 2:  # what the accessibility snapshot leaves out
         if observation.get("title"):
             out["title"] = observation["title"]
@@ -289,6 +292,9 @@ BUILTINS["web.aria/v4"] = lambda observation, params: web_aria(observation, para
 # v5: `generated` — text CSS inserts with ::before/::after (icons, separators), which accessible names include
 # and element text does not; a clone writing it literally into the DOM differs from one generating it.
 BUILTINS["web.aria/v5"] = lambda observation, params: web_aria(observation, params, version=5)
+# v6: dialogs carry their role ("alertdialog:Remove HB-102?"), and `descriptions` gives each control's accessible
+# description (aria-describedby / aria-description).
+BUILTINS["web.aria/v6"] = lambda observation, params: web_aria(observation, params, version=6)
 
 
 # -- desktop -----------------------------------------------------------------------------------------------------
@@ -388,6 +394,9 @@ KNOWN_KEYS = {
                     "focus", "status", "dialogs", "options", "tables", "definitions", "landmarks"},
     "web.aria/v5": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract", "title",
                     "focus", "status", "dialogs", "options", "tables", "definitions", "landmarks", "generated"},
+    "web.aria/v6": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract", "title",
+                    "focus", "status", "dialogs", "options", "tables", "definitions", "landmarks", "generated",
+                    "descriptions"},
     "desktop.a11y/v1": {"windows", "controls", "text", "items"},
     "android.a11y/v1": {"controls", "text", "system"},
 }

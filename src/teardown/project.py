@@ -132,7 +132,7 @@ def default_mapper(target_spec: str, target: str) -> MapperVersion:
     if target_spec.startswith("cli:"):
         return MapperVersion(target=target, builtin="cli.behavior/v1", note="CLI behavior-level abstraction")
     if target_spec.startswith("web:"):
-        return MapperVersion(target=target, builtin="web.aria/v5", note="structured accessibility snapshot")
+        return MapperVersion(target=target, builtin="web.aria/v6", note="structured accessibility snapshot")
     if target_spec.startswith("desktop:"):
         return MapperVersion(target=target, builtin="desktop.a11y/v1", note="structured AT-SPI snapshot")
     if target_spec.startswith("android:"):

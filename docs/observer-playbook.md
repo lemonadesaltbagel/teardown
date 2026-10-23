@@ -61,6 +61,10 @@ State them in your own words, with checks:
   and where they are sent.
 - **Roles:** sign in as each role on the same pages and compare which controls exist (`same`/`differs` on
   `controls`).
+- **Every form submitted empty**, sign-in included: which messages appear, where, and where focus goes.
+- **Values with spaces and special characters** in searches and filters: what the URL shows (`%20` or `+`).
+- **History:** after leaving a filtered list and coming back (a link back, and `back`), are the filters and
+  page kept? Do status messages clear on navigation?
 
 Prefer `same`/`differs` checks for relations and `outcome` checks with small subsets for facts.
 

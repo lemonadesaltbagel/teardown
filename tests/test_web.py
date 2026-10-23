@@ -40,7 +40,7 @@ def test_driver_observes_behavior_tier_only(site):
     try:
         obs = d.reset()
         assert set(obs) == {"path", "aria", "form", "network", "api_shapes", "title", "focus", "current",
-                            "landmarks", "generated"}
+                            "landmarks", "generated", "descriptions"}
         assert "<script" not in json.dumps(obs)
         assert web_aria(obs, {})["headings"] == ["Your email"]
         assert d.step(_act(op="click", role="button", name="Nope")) is None  # absent -> NA
@@ -643,3 +643,36 @@ def test_nested_expectations_need_their_keys_and_faults_can_be_cleared(site):
         assert web_aria(d.step(load), {})["network"] == ["GET /quotes.json?page=1 200"]
     finally:
         d.close()
+
+
+def test_web_aria_v6_records_dialog_roles_and_accessible_descriptions(tmp_path):
+    from teardown.engine.abstractions import BUILTINS
+
+    root = tmp_path / "site"
+    root.mkdir()
+    head = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>T</title></head><body><main>'
+    body = ('<label>Code <input aria-describedby="code-hint"></label><p id="code-hint">Two letters, three digits.</p>'
+            '<button aria-describedby="oil">Light lantern</button><p id="oil">Needs at least 90 ml of oil.</p>')
+    (root / "alert.html").write_text(head + body + '<div role="alertdialog" aria-label="Remove HB-102?">'
+                                     '<button>Remove</button></div></main></body></html>')
+    (root / "plain.html").write_text(head + '<label>Code <input></label><button>Light lantern</button>'
+                                     '<div role="dialog" aria-label="Remove HB-102?"><button>Remove</button></div>'
+                                     '</main></body></html>')
+    local = LocalSite(root)
+    try:
+        symbols = {}
+        for page in ("alert", "plain"):
+            d = WebDriver("web:" + local.url(f"{page}.html"))
+            try:
+                symbols[page] = BUILTINS["web.aria/v6"](d.reset(), {})
+            finally:
+                d.close()
+        assert symbols["alert"]["dialogs"] == ["alertdialog:Remove HB-102?"]
+        assert symbols["plain"]["dialogs"] == ["dialog:Remove HB-102?"]
+        assert symbols["alert"]["descriptions"] == {"button:Light lantern": "Needs at least 90 ml of oil.",
+                                                    "textbox:Code": "Two letters, three digits."}
+        assert "descriptions" not in symbols["plain"]
+        v5 = BUILTINS["web.aria/v5"]({"aria": '- alertdialog "X"', "path": "/", "descriptions": {"a": "b"}}, {})
+        assert v5.get("dialogs") == ["X"] and "descriptions" not in v5  # v5 unchanged
+    finally:
+        local.close()

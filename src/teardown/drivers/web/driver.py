@@ -93,7 +93,17 @@ _STATE_PROBE = """() => {
   const focus = a && a !== document.body && a !== document.documentElement ? roleOf(a) + ':' + nameOf(a) : null;
   const current = Array.from(document.querySelectorAll('[aria-current]'))
     .filter(el => el.getAttribute('aria-current') !== 'false').map(el => roleOf(el) + ':' + nameOf(el));
-  return {focus, current};
+  // accessible descriptions: aria-describedby (each referenced element's text) or aria-description
+  const descriptions = {};
+  for (const el of document.querySelectorAll('[aria-describedby], [aria-description]')) {
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) continue;
+    const ids = (el.getAttribute('aria-describedby') || '').split(/\\s+/).filter(Boolean);
+    const text = (ids.map(id => (document.getElementById(id) || {}).textContent || '').join(' ') ||
+                  el.getAttribute('aria-description') || '').replace(/\\s+/g, ' ').trim();
+    if (text) descriptions[roleOf(el) + ':' + nameOf(el)] = text;
+  }
+  return {focus, current, descriptions};
 }"""
 
 # Landmarks (banner, navigation, named regions, ...) with their text as Playwright's text assertions read it:
