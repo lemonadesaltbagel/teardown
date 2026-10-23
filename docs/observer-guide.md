@@ -150,8 +150,11 @@ p.api_contract()                                                       # value-f
   the steps that trigger the call and state rules about what the UI then shows. Cover every important endpoint with
   5xx, network failure and malformed-body probes. The server is never touched. `coverage` lists every observed
   endpoint × fault class (5xx, network, malformed) automatically, plus each table's data states (none, one,
-  several) and, for apps with a sign-in, session expiry (a 401 fault). An item counts as covered only when a probe or
-  rule sequence actually injects that fault there, and uncovered items become unknowns.
+  several) and, for apps with a sign-in, session expiry (a 401 fault). An item counts as covered only when a recorded
+  probe or rule observation shows that call (same method and path) made while a matching fault was active, so a
+  fault on a GET does not cover a POST to the same path. Uncovered items become unknowns.
+- **Absence**: inside a nested expectation `null` means "must not be there":
+  `{"controls": {"button:Delete": null}}` holds only when no Delete button exists.
 - **Pending states**: `"mode": "hang"` holds matching calls unanswered, so the next observation shows the loading
   UI (placeholders, disabled buttons). A later `{"op": "fault", "fault": {"mode": "release", "then":
   "continue|abort|timeout|status", "status": 500}}` answers them and removes the hang.

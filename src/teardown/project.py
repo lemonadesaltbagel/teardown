@@ -186,6 +186,14 @@ def path_glob_match(glob: str, path: str) -> bool:
     return path_glob(glob)(path)
 
 
+def fault_class(f: dict[str, Any]) -> str | None:
+    """Fault action -> coverage class: 5xx | network | malformed (None for hang/4xx)."""
+    mode = f.get("mode", "status")
+    if mode == "status":
+        return "5xx" if int(f.get("status", 500)) >= 500 else None
+    return {"abort": "network", "timeout": "network", "hang": None, "malformed": "malformed"}.get(mode)
+
+
 class Project:
     def __init__(self, root: str | Path):
         self.root = Path(root)
@@ -1036,32 +1044,53 @@ class Project:
     FAULT_CLASSES = {"5xx": "a server error", "network": "a network failure or timeout",
                      "malformed": "a malformed body"}
 
+    def _observed_sequences(self, feature: str, table: Any) -> list[tuple[list[str], dict[str, Any]]]:
+        """(action sequence, the symbol recorded after its last step) for probe rows and rule checks."""
+        from teardown.engine.rules import RuleTable
+
+        pairs: list[tuple[list[str], str | None]] = [([*r.prefix, r.action], r.expect)
+                                                     for r in (table.rows if table else [])]
+        if feature in self.state.rules:
+            for rule in self.workspace.get(self.state.rules[feature], RuleTable).rules:
+                for c in rule.checks:
+                    pairs += [(c.a_inputs or [], c.observed_a), (c.b_inputs or [], c.observed_b)]
+        out = []
+        for seq, symbol in pairs:
+            value = describe_symbol(symbol) if isinstance(symbol, str) else None
+            if seq and isinstance(value, dict):
+                out.append((seq, value))
+        return out
+
     def _fault_coverage(self, feature: str, table: Any) -> dict[str, int]:
-        """Web: every observed API endpoint x fault class (5xx, network, malformed) -> how many probe or rule
-        sequences inject that fault there. Only faults actually used in a sequence count, not merely defined ones."""
+        """Web: every observed API endpoint x fault class (5xx, network, malformed) -> how many recorded probe or
+        rule observations show that call made while a matching fault was active (method and path from the
+        recorded network exchanges, so a fault on GET does not credit POST on the same path)."""
         from teardown.drivers.web.driver import path_glob
 
-        used = self._used_sequences(feature, table)
         named = self.action_table()
-        faults: list[dict[str, Any]] = []
-        for seq in used:
-            faults += [named[n]["fault"] for n in seq if named.get(n, {}).get("op") == "fault"
-                       and (named[n].get("fault") or {}).get("mode") != "release"]
-
-        def fault_class(f: dict[str, Any]) -> str | None:
-            mode = f.get("mode", "status")
-            if mode == "status":
-                return "5xx" if int(f.get("status", 500)) >= 500 else None
-            return {"abort": "network", "timeout": "network", "hang": None, "malformed": "malformed"}.get(mode)
+        templates = list(self.state.target_options.get("api_templates", []))
+        credits: dict[tuple[str, str, str], int] = {}
+        for seq, symbol in self._observed_sequences(feature, table):
+            faults = [named[n]["fault"] for n in seq if named.get(n, {}).get("op") == "fault"
+                      and (named[n].get("fault") or {}).get("mode") not in ("release", "clear")]
+            if not faults:
+                continue
+            for entry in symbol.get("network") or []:
+                method, _, rest = entry.partition(" ")
+                path = rest.rsplit(" ", 1)[0].split("?", 1)[0]
+                for f in faults:
+                    cls = fault_class(f)
+                    if cls and path_glob(f.get("path", "**"))(path) and (
+                            not f.get("method") or f["method"].upper() == method.upper()):
+                        key = (method.upper(), _contract_path(path, templates), cls)
+                        credits[key] = credits.get(key, 0) + 1
 
         counts: dict[str, int] = {}
         for path, methods in self.api_contract()["paths"].items():
             bare = path.split("?", 1)[0]
             for method in methods:
                 for cls in self.FAULT_CLASSES:
-                    counts[f"fault {method.upper()} {bare} {cls}"] = sum(
-                        1 for f in faults if fault_class(f) == cls and path_glob(f.get("path", "**"))(bare)
-                        and (not f.get("method") or f["method"].upper() == method.upper()))
+                    counts[f"fault {method.upper()} {bare} {cls}"] = credits.get((method.upper(), bare, cls), 0)
         return counts
 
     # -- rules ---------------------------------------------------------------------------------------------------
@@ -1082,6 +1111,11 @@ class Project:
                         continue
                     if not side["actions"]:
                         problems.append(f"{spec.statement[:50]!r} check {i} side {side_name}: empty action list")
+                    inline = [n for n in side["actions"] if not isinstance(n, str)]
+                    if inline:
+                        problems.append(f"{spec.statement[:50]!r} check {i} side {side_name}: actions are names; "
+                                        f"define {inline[0]!r} with define_actions and use its name")
+                        continue
                     unknown = [n for n in side["actions"] if n not in known_actions]
                     if unknown:  # an undefined action would just be unavailable (NA) and the check vacuous
                         problems.append(f"{spec.statement[:50]!r} check {i} side {side_name}: undefined actions "

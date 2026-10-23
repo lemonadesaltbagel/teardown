@@ -312,11 +312,19 @@ def test_coverage_lists_every_observed_endpoint_by_fault_class(site, tmp_path):
                             "broken": {"op": "fault", "fault": {"path": "/quotes.json", "mode": "malformed"}}})
     project.check_rules("quotes", [{"statement": "Offline loads show an alert.",
                                     "checks": [{"kind": "outcome", "a": {"actions": ["offline", "load"]},
-                                                "expect": {"alerts": ["Offline"]}}]}], workers=1)
+                                                "expect": {"alerts": ["Offline"]}}]},
+                                   {"statement": "A malformed reply alone changes nothing on screen.",
+                                    "checks": [{"kind": "outcome", "a": {"actions": ["broken"]},
+                                                "expect": {"alerts": []}}]}], workers=1)
     report = project.coverage("quotes", record_unknowns=False)
     faults = {k: v for k, v in report["counts"].items() if k.startswith("fault ")}
+    # 'broken' is used, but no call to /quotes.json was observed while it was active: no credit
     assert faults == {"fault GET /quotes.json 5xx": 0, "fault GET /quotes.json network": 1,
-                      "fault GET /quotes.json malformed": 0}  # 'broken' is defined but never used
+                      "fault GET /quotes.json malformed": 0}
+    with pytest.raises(ValueError, match="define_actions"):
+        project.check_rules("quotes", [{"statement": "x", "checks": [
+            {"kind": "outcome", "a": {"actions": [{"op": "click", "role": "button", "name": "Load quotes"}]},
+             "expect": {"alerts": []}}]}], workers=1)
 
 
 def test_discover_ui_crawls_screens_defines_actions_and_drives_coverage(site, tmp_path):

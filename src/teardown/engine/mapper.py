@@ -122,6 +122,10 @@ def _subset(want: dict, got: dict, top: bool = True) -> bool:
     absent key (abstractions omit empty collections); inside a nested object an expected key must exist (a
     control expected with no flags, ``"button:Save": []``, is a control that is there)."""
     for k, v in want.items():
+        if not top and v is None:  # nested null: this key must be absent ("button:Delete": null)
+            if k in got:
+                return False
+            continue
         if k not in got:
             if not top or (v != [] and v is not None):
                 return False

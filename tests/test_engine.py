@@ -89,3 +89,5 @@ def test_subset_expectations_are_subsets_at_every_level():
     assert not symbol_matches(observed, json.dumps({"controls": {"button:Go": []}}), "subset")
     assert not symbol_matches(observed, json.dumps({"controls": {"button:Stop": ["disabled"]}}), "subset")
     assert symbol_matches(observed, json.dumps({"alerts": []}), "subset")
+    assert symbol_matches(observed, json.dumps({"controls": {"button:Delete": None}}), "subset")  # must be absent
+    assert not symbol_matches(observed, json.dumps({"controls": {"button:Go": None}}), "subset")
