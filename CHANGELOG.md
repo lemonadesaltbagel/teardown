@@ -51,6 +51,9 @@
 - Sixth held-out web result, Fogline: 112/128 with `v6` (`research/20`).
 - Seventh held-out web result, Strewnfield: 129/130 with `v8` under the strict gate, a person approving at a
   terminal (`research/21`).
+- Eighth held-out web result, Belfry: 126/130 with `v8` under the strict gate (`research/22`).
+- `discover_ui` runs accumulate instead of replacing the inventory. Fault suggestions show the observed path
+  next to the contract path. `propose_claim` lists the valid kinds; `run_sequence` takes `keys`.
 - Field probes find a minimum length before the maximum, and count an API 4xx, a dialog left open or an
   `aria-invalid` field as a refusal. Named lists get data-state coverage. An expected `{}` means none. Controls
   whose clicks only came back `NA` are not covered. `click[role:name]` names define themselves. A repeated

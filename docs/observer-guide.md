@@ -175,6 +175,10 @@ p.api_contract()                                                       # value-f
   your `api_templates` (`/api/recitals/{id}/pieces/{piece}`); observations keep the driver's generic `{id}`
   (`/api/recitals/{id}/pieces/{id}`), and a fault suggestion shows both. A control whose recorded clicks all came back `NA`
   (off-screen, hidden) is not covered: explain it with `update_unknown`. Uncovered items become unknowns.
+- **Real names that are also ordinary words** (a product called "Belfry" whose data has an "Old Granary Belfry"
+  tower): the codename replaces every occurrence, data included, so the clone has to rewrite the same word in
+  API data to match. List only distinctive forms in `real_names` when you can, and expect this when you
+  cannot.
 - **Absence**: inside a nested expectation `null` means "must not be there":
   `{"controls": {"button:Delete": null}}` holds only when no Delete button exists. An empty object or list
   means "none": `{"controls": {}}` holds only when there are no controls, `{"alerts": []}` only when there is
