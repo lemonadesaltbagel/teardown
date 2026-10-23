@@ -60,7 +60,8 @@ State them in your own words, with checks:
 - **Keyboard:** the order Tab moves focus through a page (`press` Tab, then check `focus`); what Enter does
   in a field; whether filters and searches react while you type or only when you submit.
 - **Every route, including the unhappy ones:** a missing record's page, empty results, and pages that a role
-  may not see. Use `goto` with a made-up id. Visit each route **signed out and signed in** (the sign-in page
+  may not see. Use `goto` with a made-up id, and with an id in the wrong form (letters where ids are numbers,
+  `/birds/falcon`): "not found" and "no such page" are often different screens. Visit each route **signed out and signed in** (the sign-in page
   itself too, while signed in), and open each record's pages (edit, delete, actions) **in every status** a
   record can have (draft, submitted, approved, archived, …): a locked record's edit page is its own screen.
   Coverage lists both combinations (`route …: signed in`, `route …: one record per status`).

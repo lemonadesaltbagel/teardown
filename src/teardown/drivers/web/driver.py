@@ -116,7 +116,8 @@ _STATE_PROBE = """() => {
     const landmark = {main: 'main', nav: 'navigation', aside: 'complementary', dialog: 'dialog', table: 'table',
                       ul: 'list', ol: 'list', li: 'listitem', p: 'paragraph', img: 'img', article: 'article',
                       section: named ? 'region' : 'generic', form: named ? 'form' : 'generic'}[tag];
-    return landmark || (roleOf(el) === tag ? 'generic' : roleOf(el));
+    const role = roleOf(el);  // a tag roleOf does not know comes back unchanged: generic (but <button> is a role)
+    return landmark || (role === tag && tag !== 'button' ? 'generic' : role);
   };
   const fullName = el => {
     const role = fullRole(el);

@@ -116,6 +116,9 @@ CASES: list[Case] = [
          '<script>document.getElementById("f").focus()</script>',
          '<h2 tabindex="-1">Programme</h2><h2 tabindex="-1" id="f">Details</h2>'
          '<script>document.getElementById("f").focus()</script>'),
+    Case("focus-button", 'get_by_role("button", name="Cancel") / to_be_focused',
+         '<button id="f">Cancel</button><button>Delete</button><script>document.getElementById("f").focus()</script>',
+         '<button>Cancel</button><button id="f">Delete</button><script>document.getElementById("f").focus()</script>'),
     Case("status", 'get_by_role("status")', '<p role="status">Saved.</p>', "<p>Saved.</p>"),
     Case("alert", 'get_by_role("alert")', '<p role="alert">Failed.</p>', "<p>Failed.</p>"),
 ]

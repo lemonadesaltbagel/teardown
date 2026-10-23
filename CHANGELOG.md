@@ -5,6 +5,9 @@
 - `web.aria/v9`, the default for new web projects: `focus` names what has focus by role and name, headings
   and landmarks included (`heading:Programme`); `v8` recorded a focused heading as `h2:`. The surface audit
   adds that case (40 pairs).
+- Fixed before publication: v9 recorded a focused `<button>` as `generic:` (a role equal to its tag name was
+  taken for an unknown element). The surface audit adds focus on a button (41 pairs).
+- Discovery explores one row per status value; `retract_rule` reports rules left by status.
 - Coverage combines routes with what changes them. For apps with a sign-in, every route is visited signed
   out and signed in, judged by whether the page offers to sign out. When a table has a status column, every
   record route of that kind is visited for at least as many records as there are statuses. `suggest_probes`

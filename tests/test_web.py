@@ -750,7 +750,7 @@ def test_web_aria_v8_records_the_user_facing_playwright_surface(tmp_path):
     assert [c.id for c in CASES if not result[c.id]["web.aria/v9"]] == []  # every user-facing difference shows
     assert [c.id for c in SAME if result[c.id]["web.aria/v9"]] == []  # implementation differences do not
     assert [c.id for c in CASES if not result[c.id]["web.aria/v8"]] == ["focus-heading"]  # v8 unchanged
-    assert sum(result[c.id]["web.aria/v7"] for c in CASES) == 17  # v7 unchanged: it records 17 of the 40
+    assert sum(result[c.id]["web.aria/v7"] for c in CASES) == 18  # v7 unchanged: it records 18 of the 41
 
 
 def test_live_outputs_are_discovered_and_need_a_field_probe_without_submit(tmp_path):
