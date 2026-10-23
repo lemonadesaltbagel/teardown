@@ -177,7 +177,9 @@ def build_observe_server(project: Project) -> MCPServer:
     @server.tool(description="Register public documentation you read (dirty side). Its paragraphs join the gate "
                  "corpus so copied wording is flagged; write rules in your own words.")
     def ingest_docs(source: str, text: str) -> dict[str, Any]:
-        return {"paragraphs": project.ingest_docs(source, text)}
+        added = project.ingest_docs(source, text)
+        total = sum(1 for p in text.replace("\r\n", "\n").split("\n\n") if p.strip())
+        return {"paragraphs": added, "already_known": total - added}  # the corpus keeps each paragraph once
 
     @server.tool(description="Learn a state machine for a feature with KV or L# under an explicit oracle budget.")
     def learn_flow(

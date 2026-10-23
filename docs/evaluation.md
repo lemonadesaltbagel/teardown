@@ -51,6 +51,7 @@ and what it does not.
 | Lockline (novel web app), **held out** | web, private | spec only, both sides confined, tooling frozen (`web.aria/v3`), neutral brief | 106/130 (81.5%) | 116 / 0 / 1 | thinnest spec (38/153 coverage); misses split between unvisited pages and lossy regions/inline text (`research/17`) |
 | Scionry (novel web app), **held out** | web, private | spec only, both sides confined, tooling frozen (`web.aria/v4`, coverage-gated release), neutral brief | 121/130 (93.1%) | 201 / 0 / 1 | 77/79 coverage; misses: CSS-generated icon text (5), unprobed data states (4) (`research/18`) |
 | Wickward (novel web app), **held out** | web, private | spec only, both sides confined, tooling frozen (`web.aria/v5`, data-state coverage), neutral brief | 114/127 (89.8%) | 313 / 0 / 2 | 108/111 coverage; misses: alertdialog role (7), accessible descriptions (2), 4 behaviors (`research/19`) |
+| Fogline (novel web app), **held out** | web, private | spec only, both sides confined, tooling frozen (`web.aria/v6`), neutral brief | 112/128 (87.5%) | 201 / 0 / 0 | one verify call; misses: row headers (7), `aria-invalid` (4), named groups (2), 3 observer gaps, 2 of them hidden by a fault-coverage bug, since fixed (`research/20`) |
 | Wickwright (novel Android app) | Android, private | spec only, both sides confined | 113/118 (95.8%) | 163 / 0 / 0 | first and only round; implementer did not recognize the app (`research/14`) |
 | Conduit (round-4 release) and the round-2 novel tool, in the enforced clean room | web / CLI | as above | 99/101 · 397/397 | 570 / 0 / 6 · 1144 / 0 / 1 | implementer inside the isolated container; same outcomes as with a prompt-only barrier (`research/13`) |
 
@@ -61,20 +62,21 @@ What these numbers support:
 - **Web:**
   - On Conduit (development set), the tooling grew to capture what a real app's E2E suite checks: routing,
     error handling under faults, empty structure named by a public contract, environment-dependent layout.
-  - **On five held-out apps it scored 53% (v1), 56% (v2), 81.5% (v3), 93.1% (v4) and 89.8% (v5).** Each clone
-    reproduced its spec. Each round found the next layer of user-visible structure the abstraction lacked:
+  - **On six held-out apps it scored 53% (v1), 56% (v2), 81.5% (v3), 93.1% (v4), 89.8% (v5) and 87.5% (v6).**
+    Each clone reproduced its spec. Each round found the next layer of user-visible structure the abstraction lacked:
     - titles, focus and messages;
     - then tables and description lists;
     - then regions and inline text;
     - then CSS-generated text;
-    - now dialog roles and accessible descriptions.
+    - then dialog roles and accessible descriptions;
+    - now row headers, `aria-invalid` and named groups (recorded in `v7`, not yet measured).
 
     Coverage-gated release took the observer from 38/153 covered items to 77/79.
 - **Enforced isolation costs nothing in outcome:** the same releases reimplemented inside the clean-room
   container scored the same as with a prompt-only barrier.
 - **Android:** a spec released by a confined observer through MCP alone rebuilt a novel three-screen app to 95.8%
   of its hidden tests. The rest were orderings and messages the observer did not probe.
-- **Not yet measured:** desktop against a hidden suite; a held-out web target.
+- **Not yet measured:** desktop against a hidden suite; `web.aria/v7` on a seventh held-out web app.
 
 ## Repeating it on your own target
 

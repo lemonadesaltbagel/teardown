@@ -13,7 +13,7 @@
 
 ### Web observation
 
-- `web.aria/v3`, the default for new web projects: `tables` (name, columns, rows) and `definitions`
+- `web.aria/v3`: `tables` (name, columns, rows) and `definitions`
   (description lists).
 - `web.aria/v2`. It adds page title, focus, status messages, dialogs, select
   options, `aria-current`, and table cells, and undoes Playwright's YAML quoting for names with `#` or `:`.
@@ -47,6 +47,14 @@
   segments. `within`/`nth` handle same-named controls.
 - Discovery no longer fails on off-screen controls or selects; `back`/`forward`/`reload` actions; rule checks
   reject undefined actions.
+- `web.aria/v6`: dialog roles and accessible descriptions.
+- Sixth held-out web result, Fogline: 112/128 with `v6` (`research/20`).
+- `web.aria/v7`, the default for new web projects: an `invalid` control flag for `aria-invalid`, `row_headers`
+  per table, and `groups` (named groups, radiogroups and toolbars with their controls).
+- Fault coverage counts an item only when a recorded observation shows that method and path called while a
+  matching fault was active. Before, a fault on a GET also covered a POST to the same path.
+- Rule checks reject inline action objects with a clear message; nested `null` in an expectation asserts
+  absence; `ingest_docs` reports paragraphs already in the corpus.
 
 ## 0.1.0 (2026-10-22)
 

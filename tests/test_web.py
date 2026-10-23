@@ -40,7 +40,7 @@ def test_driver_observes_behavior_tier_only(site):
     try:
         obs = d.reset()
         assert set(obs) == {"path", "aria", "form", "network", "api_shapes", "title", "focus", "current",
-                            "landmarks", "generated", "descriptions"}
+                            "landmarks", "generated", "descriptions", "flagged"}
         assert "<script" not in json.dumps(obs)
         assert web_aria(obs, {})["headings"] == ["Your email"]
         assert d.step(_act(op="click", role="button", name="Nope")) is None  # absent -> NA
@@ -682,5 +682,46 @@ def test_web_aria_v6_records_dialog_roles_and_accessible_descriptions(tmp_path):
         assert "descriptions" not in symbols["plain"]
         v5 = BUILTINS["web.aria/v5"]({"aria": '- alertdialog "X"', "path": "/", "descriptions": {"a": "b"}}, {})
         assert v5.get("dialogs") == ["X"] and "descriptions" not in v5  # v5 unchanged
+    finally:
+        local.close()
+
+
+def test_web_aria_v7_records_aria_invalid_row_headers_and_named_groups(tmp_path):
+    from teardown.engine.abstractions import BUILTINS
+
+    root = tmp_path / "site"
+    root.mkdir()
+    head = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>T</title></head><body><main>'
+    (root / "th.html").write_text(
+        head + '<label>Litres <input aria-invalid="true" value="900"></label>'
+        '<table aria-label="Readings"><tr><th>Day</th><th>Litres</th></tr>'
+        '<tr><th scope="row">Day 12</th><td>40.0 L</td></tr></table>'
+        '<div role="group" aria-label="Net actions"><a href="/e">Edit net</a><button>Retire</button></div>'
+        '<button>Outside</button></main></body></html>')
+    (root / "td.html").write_text(
+        head + '<label>Litres <input value="900"></label>'
+        '<table aria-label="Readings"><tr><th>Day</th><th>Litres</th></tr>'
+        '<tr><td>Day 12</td><td>40.0 L</td></tr></table>'
+        '<div><a href="/e">Edit net</a><button>Retire</button></div>'
+        '<button>Outside</button></main></body></html>')
+    local = LocalSite(root)
+    try:
+        symbols = {}
+        for page in ("th", "td"):
+            d = WebDriver("web:" + local.url(f"{page}.html"))
+            try:
+                symbols[page] = BUILTINS["web.aria/v7"](d.reset(), {})
+            finally:
+                d.close()
+        th, td = symbols["th"], symbols["td"]
+        assert th["controls"]["textbox:Litres"] == ["filled", "invalid"]
+        assert td["controls"]["textbox:Litres"] == ["filled"]
+        assert th["tables"]["Readings"] == {"columns": ["Day", "Litres"], "rows": [["Day 12", "40.0 L"]],
+                                           "row_headers": ["Day 12"]}
+        assert "row_headers" not in td["tables"]["Readings"]
+        assert th["groups"] == {"group:Net actions": ["link:Edit net", "button:Retire"]}
+        assert "groups" not in td
+        v6 = BUILTINS["web.aria/v6"]({"aria": '- group "G":\n  - button "B"', "path": "/", "flagged": ["button:B"]}, {})
+        assert "groups" not in v6 and v6["controls"]["button:B"] == []  # v6 unchanged
     finally:
         local.close()

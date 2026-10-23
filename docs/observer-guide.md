@@ -109,14 +109,16 @@ p.api_contract()                                                       # value-f
     "name": ...}` scopes the lookup, and `nth` picks one among several matches.
   - **Outcomes:** a missing element, or one a user could not act on, makes the step `NA`; a disabled one makes
     it `DISABLED`. An outcome check expects these as `{"value": "NA"}` / `{"value": "DISABLED"}`.
-- **A symbol is the structured accessibility view** (`web.aria/v6`, the default for new projects):
+- **A symbol is the structured accessibility view** (`web.aria/v7`, the default for new projects):
   - `path`, `title`, `headings`, `alerts`;
   - `status` (live-region messages such as "Saved.");
   - `text`;
-  - `tables` (each table's name, columns and rows of cells);
+  - `tables` (each table's name, columns and rows of cells, and `row_headers`: the cells that head their row);
   - `definitions` (description-list term/definition pairs);
-  - `controls` (role:name → state flags, including `current` for `aria-current`; textbox values reduced to
-    filled/empty);
+  - `controls` (role:name → state flags, including `current` for `aria-current` and `invalid` for
+    `aria-invalid`; textbox values reduced to filled/empty);
+  - `groups`: each named group, radiogroup or toolbar with the controls inside it (`group:Net actions` →
+    `["link:Edit net", ...]`);
   - `options` (each combobox's options, the selected one marked);
   - `dialogs`, `focus` (role:name of the focused element), `invalid`;
   - `network` (API method, path template, status);
@@ -130,7 +132,7 @@ p.api_contract()                                                       # value-f
 
   Projects keep the version they were created with (`v1`: no title, focus, status or tables; `v2`: table cells
   flattened into `text`; `v3`: no landmarks; `v4`: no `generated`; `v5`: dialogs without roles, no
-  `descriptions`).
+  `descriptions`; `v6`: no `aria-invalid` flag, row headers or groups).
 - Rules on UIs compare **sequences**: `{"actions": [...]}` on each side; restrict `keys` to what the rule is about
   (`controls`, `path`, `alerts`, `network`) so incidental text does not break the relation.
 - Field probes find length limits and classify refusals as client-side (submit disabled / no request) or

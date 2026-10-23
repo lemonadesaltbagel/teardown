@@ -49,7 +49,8 @@ State them in your own words, with checks:
 - **State:** what persists across screens and reloads; what resets, and which action resets it.
 - **Enablement:** which controls are disabled until which input.
 - **Lists:** adding, removing, caps, ordering, duplicates, totals.
-- **Derived values:** formulas checked at several points, including boundaries and rounding.
+- **Derived values:** formulas checked at several points, including boundaries and rounding, and with inputs
+  out of range or unfinished: what replaces the value then?
 - **Defaults:** what an empty input means.
 - **Keyboard:** the order Tab moves focus through a page (`press` Tab, then check `focus`); what Enter does
   in a field; whether filters and searches react while you type or only when you submit.

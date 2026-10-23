@@ -179,11 +179,19 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
     combobox = None  # v2: options belong to the combobox above them
     table: dict[str, Any] | None = None  # v3: the table being read, with its depth
     term: str | None = None  # v3: a term waiting for its definition
+    groups: list[tuple[int, str]] = []  # v7: named groups open around the current node
     for n in parse_aria(observation["aria"], yaml_strings=version >= 2):
         if skip_depth is not None and n["depth"] > skip_depth:
             continue
         skip_depth = None
         role = n["role"]
+        if version >= 7:
+            while groups and n["depth"] <= groups[-1][0]:
+                groups.pop()
+            if role in ("group", "radiogroup", "toolbar") and n["name"]:
+                key = f"{role}:{n['name']}"
+                out.setdefault("groups", {}).setdefault(key, [])
+                groups.append((n["depth"], key))
         if version >= 3:  # structure: tables (columns and rows of cells) and description lists
             if table is not None and n["depth"] <= table["depth"]:
                 table = None
@@ -205,6 +213,8 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
                     if not table["data"]["rows"]:
                         table["data"]["rows"].append([])
                     table["data"]["rows"][-1].append((n["name"] or n["text"] or "").strip())
+                    if version >= 7 and role == "rowheader":  # v7: which cells head their row
+                        table["data"].setdefault("row_headers", []).append(table["data"]["rows"][-1][-1])
                     continue
             if role == "term":
                 term = (n["name"] or n["text"] or "").strip()
@@ -242,6 +252,8 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
             if role in _VALUE_ROLES:
                 flags.append("filled" if (n["text"] or "").strip() else "empty")
             out["controls"][f"{role}:{n['name'] or ''}"] = flags
+            for _, group in groups:
+                out["groups"][group].append(f"{role}:{n['name'] or ''}")
     invalid = sorted(f["name"] for f in observation.get("form", []) if not f.get("valid", True))
     if invalid:
         out["invalid"] = invalid
@@ -263,12 +275,21 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
         for marked in observation.get("current") or []:
             if marked in out["controls"] and "current" not in out["controls"][marked]:
                 out["controls"][marked] = sorted([*out["controls"][marked], "current"])
+    if version >= 7:  # aria-invalid: a control flag; marked elements that are not controls are listed
+        for marked in observation.get("flagged") or []:
+            if marked in out["controls"]:
+                if "invalid" not in out["controls"][marked]:
+                    out["controls"][marked] = sorted([*out["controls"][marked], "invalid"])
+            else:
+                out.setdefault("flagged", []).append(marked)
     if params.get("mask_dates"):
         for key in ("headings", "alerts", "text", "status"):
             if key in out:
                 out[key] = [CALENDAR_DATE.sub("<date>", t) for t in out[key]]
         for data in out.get("tables", {}).values():
             data["rows"] = [[CALENDAR_DATE.sub("<date>", c) for c in row] for row in data["rows"]]
+            if "row_headers" in data:
+                data["row_headers"] = [CALENDAR_DATE.sub("<date>", c) for c in data["row_headers"]]
         if "definitions" in out:
             out["definitions"] = [[t, CALENDAR_DATE.sub("<date>", d)] for t, d in out["definitions"]]
         if "landmarks" in out:
@@ -295,6 +316,10 @@ BUILTINS["web.aria/v5"] = lambda observation, params: web_aria(observation, para
 # v6: dialogs carry their role ("alertdialog:Remove HB-102?"), and `descriptions` gives each control's accessible
 # description (aria-describedby / aria-description).
 BUILTINS["web.aria/v6"] = lambda observation, params: web_aria(observation, params, version=6)
+# v7: `invalid` control flag for fields the app marks with aria-invalid (the browser's own constraint validation
+# stays in the `invalid` key); tables list their `row_headers`; `groups` maps each named group, radiogroup or
+# toolbar to the controls inside it.
+BUILTINS["web.aria/v7"] = lambda observation, params: web_aria(observation, params, version=7)
 
 
 # -- desktop -----------------------------------------------------------------------------------------------------
@@ -397,6 +422,9 @@ KNOWN_KEYS = {
     "web.aria/v6": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract", "title",
                     "focus", "status", "dialogs", "options", "tables", "definitions", "landmarks", "generated",
                     "descriptions"},
+    "web.aria/v7": {"path", "headings", "alerts", "text", "controls", "invalid", "network", "contract", "title",
+                    "focus", "status", "dialogs", "options", "tables", "definitions", "landmarks", "generated",
+                    "descriptions", "groups", "flagged"},
     "desktop.a11y/v1": {"windows", "controls", "text", "items"},
     "android.a11y/v1": {"controls", "text", "system"},
 }

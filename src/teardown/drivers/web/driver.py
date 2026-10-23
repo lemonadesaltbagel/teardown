@@ -103,7 +103,10 @@ _STATE_PROBE = """() => {
                   el.getAttribute('aria-description') || '').replace(/\\s+/g, ' ').trim();
     if (text) descriptions[roleOf(el) + ':' + nameOf(el)] = text;
   }
-  return {focus, current, descriptions};
+  // fields the app marks invalid (aria-invalid), as distinct from the browser's own constraint validation
+  const flagged = Array.from(document.querySelectorAll('[aria-invalid]'))
+    .filter(el => !['false', ''].includes(el.getAttribute('aria-invalid'))).map(el => roleOf(el) + ':' + nameOf(el));
+  return {focus, current, descriptions, flagged};
 }"""
 
 # Landmarks (banner, navigation, named regions, ...) with their text as Playwright's text assertions read it:
