@@ -170,7 +170,11 @@ p.api_contract()                                                       # value-f
   each table and each named list, for apps with a sign-in, session expiry (a 401 fault), and each **live output**: a field whose typing
   changes the screen without a click (a preview, total or counter). A live output is covered once the screen
   was recorded right after typing at least three different values into it (`probe_web_field` without
-  `submit`). An item counts as covered only when a recorded
+  `submit`). **Routes in combination:** for apps with a sign-in, every route visited signed out and signed in
+  (the sign-in page included; "signed in" means the page offers to sign out). When a table has a status
+  column, every record route of that kind (`/recitals/*/edit`) is visited for at least as many records as there
+  are statuses. `suggest_probes` gives the sign-in steps and a `goto` for each. An item counts as covered only
+  when a recorded
   probe or rule observation shows that call (same method and path) made while a matching fault was active, so a
   fault on a GET does not cover a POST to the same path. Coverage and `api_contract` name path segments after
   your `api_templates` (`/api/recitals/{id}/pieces/{piece}`); observations keep the driver's generic `{id}`

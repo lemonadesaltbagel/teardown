@@ -15,6 +15,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, ClassVar
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -192,6 +193,34 @@ def fault_class(f: dict[str, Any]) -> str | None:
     if mode == "status":
         return "5xx" if int(f.get("status", 500)) >= 500 else None
     return {"abort": "network", "timeout": "network", "hang": None, "malformed": "malformed"}.get(mode)
+
+
+_SIGN_OUT = re.compile(r"\b(sign|log)\s?-?out\b", re.IGNORECASE)
+_STATUS_HEADER = re.compile(r"\b(status|state|stage)\b", re.IGNORECASE)
+
+
+def _record_route(path: str) -> tuple[str, str | None]:
+    """'/recitals/4/edit?x=1' -> ('/recitals/*/edit', '4'): segments with a digit are record ids."""
+    parts = [p for p in path.split("?", 1)[0].split("/") if p]
+    ids = [p for p in parts if any(c.isdigit() for c in p)]
+    return "/" + "/".join("*" if any(c.isdigit() for c in p) else p for p in parts), (ids[-1] if ids else None)
+
+
+def _signed_in_prefix(seq: list[str], named: dict[str, dict[str, Any]]) -> tuple[bool, list[str]]:
+    """(whether the sequence ends signed in, the steps up to its last sign-in). A sign-in is a password fill
+    followed by a click; a click on a sign-out control ends the session."""
+    signed, pending, prefix = False, False, []
+    for i, n in enumerate(seq):
+        spec = named.get(n) or {}
+        op = spec.get("op") or spec.get("action")
+        name = spec.get("name") or ""
+        if op == "fill" and "password" in name.lower():
+            pending = True
+        elif op == "click" and _SIGN_OUT.search(name):
+            signed, pending = False, False
+        elif op == "click" and pending:
+            signed, pending, prefix = True, False, seq[: i + 1]
+    return signed, prefix
 
 
 def _named_lists(outline: list[str]) -> dict[str, int]:
@@ -857,6 +886,7 @@ class Project:
         if state.target_spec.startswith("web:"):
             counts.update(self._fault_coverage(feature, table))
             counts.update(self._data_state_coverage(feature, table))
+            counts.update(self._route_coverage(feature, table)["counts"])
         if not state.target_spec.startswith("cli:"):
             counts.update(self._ui_coverage(feature, table))
         items.update({k: [] for k in counts if k not in items})
@@ -983,6 +1013,15 @@ class Project:
         named = self.action_table()
         out: list[dict[str, Any]] = []
 
+        cache: dict[str, Any] = {}
+
+        def routes_info() -> dict[str, Any]:
+            if "routes" not in cache:
+                table = self.workspace.get(self.state.probes[feature], ProbeTable) \
+                    if feature in self.state.probes else None
+                cache["routes"] = self._route_coverage(feature, table)
+            return cache["routes"]
+
         def screen_with(kind: str, key: str) -> dict[str, Any] | None:
             return next((sc for sc in screens.values() if key in sc[kind]), None)
 
@@ -1046,6 +1085,26 @@ class Project:
                 out.append({"item": item, "kind": "data-state", kind_of: name, "state": state,
                             "suggest": f"{how}, then state a rule with an outcome check on {key} (and the count or "
                                        "empty-state text)"})
+            elif item.startswith("route ") and item.endswith((": signed in", ": signed out")):
+                route, label = item[len("route "):].rsplit(": ", 1)
+                info = routes_info()
+                path = info["examples"].get(route)
+                go = {f"goto[{path}]": {"op": "goto", "value": path}} if path else {}
+                sequence = [*(info["signin"] if label == "signed in" else []), *go]
+                out.append({"item": item, "kind": "route-session", "define": go, "sequence": sequence,
+                            "suggest": f"open {path or route} {label} (define the goto action, then run the "
+                                       "sequence) and state what the page shows: its content, or where it sends "
+                                       "the user" + ("" if path else "; no visit recorded yet, so pick a "
+                                                     "concrete path for this route")})
+            elif item.endswith(": one record per status"):
+                route = item[len("route "):-len(": one record per status")]
+                info = routes_info()
+                tbl, values = info["status_routes"].get(route, ("", []))
+                out.append({"item": item, "kind": "route-status", "statuses": values, "table": tbl,
+                            "visited": info["records"].get(route, []),
+                            "suggest": f"open {route} for a record in each status ({', '.join(values)}; see "
+                                       f"table {tbl!r}) and state what each shows: a locked record's page is "
+                                       "often its own screen"})
             elif item.startswith("session expiry"):
                 out.append({"item": item, "kind": "session",
                             "action": {"op": "fault", "fault": {"path": "/**", "mode": "status", "status": 401}},
@@ -1121,6 +1180,84 @@ class Project:
                 1 for n in used if named.get(n, {}).get("op") == "fault"
                 and str((named[n].get("fault") or {}).get("status")) == "401")
         return counts
+
+    def _route_coverage(self, feature: str, table: Any) -> dict[str, Any]:
+        """Web: routes in combination with what changes them.
+
+        - Route x session (apps with a sign-in): every route visited signed out and signed in, the sign-in page
+          included. A route's guard or redirect only shows in the other session state.
+        - Route x record status: when a table has a status column (Status, State, Stage), every record route of
+          the same kind (``/recitals/*``, ``/recitals/*/edit``) visited for at least as many records as there are
+          statuses. A locked record's page is often its own screen.
+
+        A visit is the last ``goto`` of a recorded sequence (the route asked for) and the route it ended on."""
+        named = self.action_table()
+        found = self._discovery(feature) or {"screens": {}}
+        visits: list[tuple[str, str | None, bool, str]] = []  # (route, record id, signed in, concrete path)
+        examples_seed: dict[str, str] = {}
+        signin: list[str] = []
+        observed = self._observed_sequences(feature, table)
+
+        def offers_sign_out(symbol: dict[str, Any]) -> bool:
+            return any(_SIGN_OUT.search(k.split(":", 1)[-1]) for k in symbol.get("controls") or {})
+
+        # signed in = the page offers to sign out (a failed sign-in or an expired session does not); apps without
+        # a sign-out control fall back to the sequence: a password fill followed by a click
+        by_page = any(offers_sign_out(v) for _, v in observed)
+        for seq, value in observed:
+            signed, prefix = _signed_in_prefix(seq, named)
+            if by_page:
+                signed = offers_sign_out(value)
+            clean = prefix and not any((named.get(n) or {}).get("op") == "fault" for n in prefix)
+            if clean and signed and (not signin or len(prefix) < len(signin)):  # the shortest fault-free sign-in
+                signin = prefix
+            paths = [value.get("path") or ""]
+            last = named.get(seq[-1]) or {}
+            if last.get("op") == "goto" and last.get("value"):
+                paths.append(last["value"])
+            for path in {p for p in paths if p}:
+                route, record = _record_route(path)
+                visits.append((route, record, signed, path.split("?", 1)[0]))
+        routes = {_record_route(sc.get("path") or "")[0] for sc in found["screens"].values() if sc.get("path")}
+        routes |= {v[0] for v in visits}  # plus the start page and every page a goto action names
+        start = urlparse(self.state.target_spec.split(":", 1)[1]).path
+        routes |= {_record_route(p)[0] for p in [start, *(a.get("value") for a in named.values()
+                                                          if a.get("op") == "goto")] if p}
+        for path in [start, *(a.get("value") for a in named.values() if a.get("op") == "goto")]:
+            if path:
+                examples_seed.setdefault(_record_route(path)[0], path.split("?", 1)[0])
+        signs_in = any((a.get("op") == "fill" or a.get("action") == "fill")
+                       and "password" in (a.get("name") or "").lower() for a in named.values())
+        counts: dict[str, int] = {}
+        if signs_in:
+            for route in sorted(routes):
+                for signed, label in ((False, "signed out"), (True, "signed in")):
+                    counts[f"route {route}: {label}"] = sum(1 for v in visits if v[0] == route and v[2] == signed)
+        statuses: dict[str, set[str]] = {}  # table name -> status values
+        kinds: dict[str, str] = {}  # table name -> its name and headers, lowercased, for matching routes
+        for sym in self._recorded_symbols(feature, table):
+            for name, data in (sym.get("tables") or {}).items():
+                cols = data.get("columns") or []
+                for i, col in enumerate(cols):
+                    if _STATUS_HEADER.search(col or ""):
+                        statuses.setdefault(name, set()).update(
+                            row[i] for row in data.get("rows", []) if i < len(row) and row[i])
+                        kinds[name] = " ".join([name, *cols]).lower()
+        status_routes: dict[str, tuple[str, list[str]]] = {}
+        for route in sorted(r for r in routes if "*" in r):
+            stem = route.strip("/").split("/")[0].lower().rstrip("s")
+            for name, values in statuses.items():
+                if stem and stem in kinds[name] and len(values) > 1:
+                    status_routes[route] = (name, sorted(values)[:8])
+                    break
+        for route, (_, values) in status_routes.items():
+            records = {v[1] for v in visits if v[0] == route and v[1]}
+            counts[f"route {route}: one record per status"] = len(records) if len(records) >= len(values) else 0
+        examples = dict(examples_seed)
+        for v in visits:
+            examples[v[0]] = examples.get(v[0]) or v[3]
+        return {"counts": counts, "signin": signin, "examples": examples, "status_routes": status_routes,
+                "records": {r: sorted({v[1] for v in visits if v[0] == r and v[1]}) for r in status_routes}}
 
     FAULT_CLASSES = {"5xx": "a server error", "network": "a network failure or timeout",
                      "malformed": "a malformed body"}

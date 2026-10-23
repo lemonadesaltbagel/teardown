@@ -5,6 +5,11 @@
 - `web.aria/v9`, the default for new web projects: `focus` names what has focus by role and name, headings
   and landmarks included (`heading:Programme`); `v8` recorded a focused heading as `h2:`. The surface audit
   adds that case (40 pairs).
+- Coverage combines routes with what changes them. For apps with a sign-in, every route is visited signed
+  out and signed in, judged by whether the page offers to sign out. When a table has a status column, every
+  record route of that kind is visited for at least as many records as there are statuses. `suggest_probes`
+  gives the sign-in steps and a `goto` for each. On the eighth held-out round's project it flags exactly what
+  the observer missed: the sign-in page while signed in, and locked records' edit pages.
 
 ## 0.2.0 (2026-10-23)
 

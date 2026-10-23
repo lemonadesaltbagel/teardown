@@ -63,6 +63,7 @@ State them in your own words, with checks:
   may not see. Use `goto` with a made-up id. Visit each route **signed out and signed in** (the sign-in page
   itself too, while signed in), and open each record's pages (edit, delete, actions) **in every status** a
   record can have (draft, submitted, approved, archived, …): a locked record's edit page is its own screen.
+  Coverage lists both combinations (`route …: signed in`, `route …: one record per status`).
 - **Data states:** every list with no rows, exactly one row (singular wording such as "1 item"), and several.
   Coverage lists these per table and per named list, including summary lists that a change elsewhere empties
   (return every loan, resolve every issue): what replaces the list then?

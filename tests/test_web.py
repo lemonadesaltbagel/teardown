@@ -814,3 +814,64 @@ def test_coverage_lists_data_states_of_named_lists():
             assert hint["list"] == "On loan" and "`outline`" in hint["suggest"]
         finally:
             local.close()
+
+
+def test_coverage_combines_routes_with_session_and_record_status(tmp_path):
+    root = tmp_path / "site"
+    (root / "items" / "1").mkdir(parents=True)
+    (root / "items" / "2").mkdir(parents=True)
+    head = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>T</title></head><body><main>'
+    signed = 'localStorage.getItem("s")'
+    (root / "signin.html").write_text(
+        head + f'<script>if ({signed}) location.replace("/list.html");</script><h1>Sign in</h1>'
+        '<label>Username <input></label><label>Password <input type="password"></label>'
+        '<button id="go">Sign in</button><script>document.getElementById("go").onclick=()=>{'
+        'localStorage.setItem("s","1");location.href="/list.html";};</script></main></body></html>')
+    (root / "list.html").write_text(
+        head + f'<script>if (!{signed}) location.replace("/signin.html");</script><h1>Items</h1>'
+        '<button id="out">Sign out</button><table aria-label="Items"><tr><th>Name</th><th>Status</th></tr>'
+        '<tr><td><a href="/items/1/edit.html">One</a></td><td>Draft</td></tr>'
+        '<tr><td><a href="/items/2/edit.html">Two</a></td><td>Locked</td></tr></table>'
+        '<script>document.getElementById("out").onclick=()=>{localStorage.clear();location.href="/signin.html";};'
+        '</script></main></body></html>')
+    for n, heading in (("1", "Edit One"), ("2", "Cannot edit")):
+        (root / "items" / n / "edit.html").write_text(
+            head + f'<script>if (!{signed}) location.replace("/signin.html");</script><h1>{heading}</h1>'
+            '<button>Sign out</button></main></body></html>')
+    local = LocalSite(root)
+    try:
+        project = Project(tmp_path / "p")
+        project.open_target("web:" + local.url("signin.html"), purpose="research")
+        project.define_actions({
+            "user": {"op": "fill", "role": "textbox", "name": "Username", "value": "a"},
+            "pw": {"op": "fill", "role": "textbox", "name": "Password", "value": "b"},
+            "submit": {"op": "click", "role": "button", "name": "Sign in"},
+            "edit1": {"op": "goto", "value": "/items/1/edit.html"}})
+        project.check_rules("items", [
+            {"statement": "Signing in shows the items.", "checks": [
+                {"kind": "outcome", "a": {"actions": ["user", "pw", "submit"]}, "expect": {"path": "/list.html"}}]},
+            {"statement": "A draft item can be edited.", "checks": [
+                {"kind": "outcome", "a": {"actions": ["user", "pw", "submit", "edit1"]},
+                 "expect": {"headings": ["Edit One"]}}]}], workers=1)
+        uncovered = set(project.coverage("items", record_unknowns=False)["uncovered"])
+        assert {"route /signin.html: signed in", "route /items/*/edit.html: signed out",
+                "route /items/*/edit.html: one record per status"} <= uncovered
+        assert "route /items/*/edit.html: signed in" not in uncovered
+        hints = {s["item"]: s for s in project.suggest_probes("items", limit=60)}
+        session = hints["route /signin.html: signed in"]
+        assert session["sequence"] == ["user", "pw", "submit", "goto[/signin.html]"]
+        status = hints["route /items/*/edit.html: one record per status"]
+        assert status["statuses"] == ["Draft", "Locked"] and status["visited"] == ["1"]
+        project.define_actions({**session["define"], "edit2": {"op": "goto", "value": "/items/2/edit.html"}})
+        project.check_rules("items", [
+            {"statement": "A signed-in user who opens the sign-in page is sent to the items.", "checks": [
+                {"kind": "outcome", "a": {"actions": session["sequence"]}, "expect": {"path": "/list.html"}}]},
+            {"statement": "A locked item cannot be edited.", "checks": [
+                {"kind": "outcome", "a": {"actions": ["user", "pw", "submit", "edit2"]},
+                 "expect": {"headings": ["Cannot edit"]}}]},
+            {"statement": "Signed out, an edit page sends you to sign in.", "checks": [
+                {"kind": "outcome", "a": {"actions": ["edit1"]}, "expect": {"path": "/signin.html"}}]}], workers=1)
+        uncovered = set(project.coverage("items", record_unknowns=False)["uncovered"])
+        assert not {i for i in uncovered if i.startswith(("route /signin.html", "route /items/"))}
+    finally:
+        local.close()
