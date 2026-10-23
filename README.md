@@ -115,13 +115,14 @@ teardown cleanroom down  --project P
 
 1. **Observe.** Drivers run the target and capture behavior only: outputs and file effects for CLIs,
    accessibility trees and API exchanges for web apps, accessibility trees for Android. A *mapper* turns each
-   observation into a compact, wording-agnostic symbol. For web apps that symbol is versioned (`web.aria/v8`)
+   observation into a compact, wording-agnostic symbol. For web apps that symbol is versioned (`web.aria/v9`)
    and records everything a user-facing Playwright test can tell apart.
 2. **Generalize.** UI discovery crawls every screen. The observer probes fields by equivalence class and
    boundary, injects faults (server errors, network failures, malformed bodies, unreadable files, airplane
    mode) and states rules in its own words. Teardown checks every rule against the original and records it as
-   corroborated or falsified. Coverage lists what is left (each control, field, endpoint × fault, data state,
-   live output), and a release is refused until every item is exercised or explained.
+   corroborated or falsified. Coverage lists what is left: each control, field, endpoint × fault, data state
+   and live output, every route signed in and signed out, and record pages in each status. A release is
+   refused until every item is exercised or explained.
 3. **Gate.** The release is checked for copied expression (verbatim and near-verbatim matches against everything
    observed and every ingested document) and for real names, which become a codename. In strict mode, findings
    need your recorded approval.
@@ -170,9 +171,13 @@ own container, and the clone was scored on the hidden suite.
   focus, tables, landmarks, generated text, dialog roles, row headers). Each was then added as a new version,
   so released specs keep verifying.
 - **`v8` came from a principle instead:** it records every difference a user-facing Playwright locator or
-  assertion can see, checked by an audit of page pairs (41 now). In both `v8` rounds every miss was a state or
-  route the observer never exercised, such as a locked record's edit page or the sign-in page while signed in.
-  Coverage now lists those combinations, and in round 9 that kind of miss did not recur.
+  assertion can see, checked by an audit of page pairs (41 now). `v9` adds named focus (`heading:Programme`,
+  `button:Cancel`).
+- **What is left is mostly the observer's.** In both `v8` rounds every miss was a state or route the observer
+  never exercised, such as a locked record's edit page or the sign-in page while signed in. Coverage now lists
+  those combinations, and in round 9 the observer covered every one, so that kind of miss did not recur.
+  Round 9's two misses were a `v9` bug (a focused button recorded without its name, since fixed and added to
+  the audit) and a malformed record id nobody opened.
 - **Rounds 7–9 ran under the strict gate.** The observer could not approve anything. A person approved
   each release at their own terminal with three class-level decisions, recorded in the audit log.
 
