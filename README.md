@@ -134,7 +134,7 @@ teardown cleanroom down  --project P
 | Target | What Teardown observes | Faults it can inject | Requirements | Status |
 |---|---|---|---|---|
 | Command-line tools | Exit code, stdout, diagnostic presence and errno class, file effects | Closed/full stdio, unreadable files, read-only directories | Docker (isolated runner) or local | **Stable** |
-| Web apps | Everything a user-facing Playwright locator or assertion can tell apart (the accessibility tree with roles, names, levels, states and nesting; field values and properties; titles, focus, status messages, landmarks text), plus API method/path/status and public-contract selectors | 5xx, network failure, timeout, malformed body, pending requests | Playwright Chromium; optional backend reset command | **Working**: 99.2% and 96.9% of hidden tests on two held-out apps (see Results) |
+| Web apps | Everything a user-facing Playwright locator or assertion can tell apart (the accessibility tree with roles, names, levels, states and nesting; field values and properties; titles, focus, status messages, landmarks text), plus API method/path/status and public-contract selectors | 5xx, network failure, timeout, malformed body, pending requests | Playwright Chromium; optional backend reset command | **Working**: 96.9–99.2% of hidden tests on the last three held-out apps (see Results) |
 | Android apps | Controls by role and name with state flags, visible text, system dialogs | Network off (airplane mode) | Android SDK, emulator or device via `adb` | **Working** |
 | Linux desktop apps | AT-SPI tree: windows, controls, text, list items | — | Docker (Xvfb + AT-SPI container) | Experimental |
 | macOS, Windows, iOS | — | — | — | Not started |
@@ -147,9 +147,9 @@ Teardown refuses to bypass protections and never captures implementation-tier da
 Each result was scored on a hidden test suite that the observer never saw, against a pinned denominator. Each
 comes with its caveat. The method is in [docs/evaluation.md](docs/evaluation.md).
 
-### Web apps no model has seen: 129/130 and 126/130
+### Web apps no model has seen: 129/130, 126/130 and 125/127
 
-Eight web apps were written for the benchmark, each with its own hidden Playwright suite. Every round ran the
+Nine web apps were written for the benchmark, each with its own hidden Playwright suite. Every round ran the
 same way: the tooling was frozen before the run, the observer and the implementer were each confined to their
 own container, and the clone was scored on the hidden suite.
 
@@ -163,21 +163,24 @@ own container, and the clone was scored on the hidden suite.
 | 6 | Fogline | `v6` | standard | 112/128 (87.5%) |
 | 7 | Strewnfield | `v8` | **strict** | **129/130 (99.2%)** |
 | 8 | Belfry | `v8` | **strict** | **126/130 (96.9%)** |
+| 9 | Jessline | `v9` | **strict** | **125/127 (98.4%)** |
 
 - **Every clone matched its spec.** What the hidden suites caught were things the spec did not contain.
 - **Rounds 1–6** each exposed the next kind of page structure the abstraction did not record yet (titles and
   focus, tables, landmarks, generated text, dialog roles, row headers). Each was then added as a new version,
   so released specs keep verifying.
 - **`v8` came from a principle instead:** it records every difference a user-facing Playwright locator or
-  assertion can see, checked by an audit of 39 page pairs. In both `v8` rounds every miss was a state or route
-  the observer never exercised, such as a locked record's edit page or the sign-in page while signed in.
-- **Rounds 7 and 8 ran under the strict gate.** The observer could not approve anything. A person approved
+  assertion can see, checked by an audit of page pairs (41 now). In both `v8` rounds every miss was a state or
+  route the observer never exercised, such as a locked record's edit page or the sign-in page while signed in.
+  Coverage now lists those combinations, and in round 9 that kind of miss did not recur.
+- **Rounds 7–9 ran under the strict gate.** The observer could not approve anything. A person approved
   each release at their own terminal with three class-level decisions, recorded in the audit log.
 
 Reports: [1](research/15-held-out-web-kilnroll.md) · [2](research/16-held-out-web-kilnshare.md) ·
 [3](research/17-held-out-web-lockline.md) · [4](research/18-held-out-web-scionry.md) ·
 [5](research/19-held-out-web-wickward.md) · [6](research/20-held-out-web-fogline.md) ·
-[7](research/21-held-out-web-strewnfield-strict.md) · [8](research/22-held-out-web-belfry-strict.md)
+[7](research/21-held-out-web-strewnfield-strict.md) · [8](research/22-held-out-web-belfry-strict.md) ·
+[9](research/23-held-out-web-jessline-strict.md)
 
 ### A command-line tool no model has seen: 397/397
 

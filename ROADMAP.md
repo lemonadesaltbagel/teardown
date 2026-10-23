@@ -110,16 +110,17 @@ novel tool with an independent observer agent: **spec arm 397/397**, hybrid (spe
 - [x] Conduit round 4 with `asset_hosts` + `mask_dates`: 99/101; conformance 576/576. The last 2 need DOM beyond
   the public contract.
 - [x] Held-out web benchmark: seven novel apps, each with its own hidden Playwright suite, both sides confined,
-  tooling frozen per round: 53% → 56% → 81.5% → 93.1% → 89.8% → 87.5% → 99.2% → 96.9% (`research/15`–`22`).
+  tooling frozen per round: 53% → 56% → 81.5% → 93.1% → 89.8% → 87.5% → 99.2% → 96.9% → 98.4%
+  (`research/15`–`23`).
 - [x] Versioned abstractions `web.aria/v1`–`v8`; released specs keep verifying under their version. `v8` comes
   from an audit of what user-facing Playwright locators and assertions tell apart (39 pairs, plus 7 that must
   stay identical; `teardown.drivers.web.surface`), not from one round's misses.
 - [x] Observer productivity: `discover_ui`, UI / endpoint × fault / data-state / session / live-output coverage,
   `suggest_probes`, coverage-gated release, the playbook as an MCP prompt.
 - [x] A second held-out round with `v8` (96.9%): the jump holds; the remaining misses are unexercised states.
-- [ ] Coverage for combinations: route × session state and route × record status (the misses of both `v8`
-  rounds).
-- [ ] `web.aria/v9`: name focus on non-interactive elements (headings are recorded as `h2:` today).
+- [x] Coverage for combinations: route × session state and route × record status. In round 9 the observer
+  covered every item, and that kind of miss did not recur.
+- [x] `web.aria/v9`: focus named by role and accessible name for any element (headings, buttons, landmarks).
 - [ ] CDP coverage for exploration steering; APE-style state-key refinement; HAR freeze for 3-way layering.
 - [ ] TodoMVC benchmark; SaaS limited-reset mode.
 - **Exit:** Conduit clone from a Teardown web spec + the public selectors contract, scored on the hidden E2E

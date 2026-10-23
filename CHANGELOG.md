@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Ninth held-out web result, Jessline: 125/127 with `v9` and combination coverage under the strict gate;
+  verification had no inconclusive checks (`research/23`).
+
 - `web.aria/v9`, the default for new web projects: `focus` names what has focus by role and name, headings
   and landmarks included (`heading:Programme`); `v8` recorded a focused heading as `h2:`. The surface audit
   adds that case (40 pairs).

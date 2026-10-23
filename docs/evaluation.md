@@ -54,6 +54,7 @@ and what it does not.
 | Fogline (novel web app), **held out** | web, private | spec only, both sides confined, tooling frozen (`web.aria/v6`), neutral brief | 112/128 (87.5%) | 201 / 0 / 0 | one verify call; misses: row headers (7), `aria-invalid` (4), named groups (2), 3 observer gaps, 2 of them hidden by a fault-coverage bug, since fixed (`research/20`) |
 | Strewnfield (novel web app), **held out** | web, private | spec only, both sides confined, **strict gate** (a person approved at a terminal), tooling frozen (`web.aria/v8`), neutral brief | 129/130 (99.2%) | 332 / 0 / 1 | one verify call; 102/105 coverage; one miss, an empty list's message the observer never produced (`research/21`) |
 | Belfry (novel web app), **held out** | web, private | as Strewnfield: strict gate, `web.aria/v8`, both sides confined | 126/130 (96.9%) | 237 / 0 / 18 | 98/99 coverage; four misses, all states or routes the observer never exercised (`research/22`) |
+| Jessline (novel web app), **held out** | web, private | strict gate, `web.aria/v9`, route × session and route × status coverage, both sides confined | 125/127 (98.4%) | 271 / 0 / 0 | 101/102 coverage; misses: a v9 bug (a focused button recorded as `generic:`, since fixed) and a malformed id never opened (`research/23`) |
 | Wickwright (novel Android app) | Android, private | spec only, both sides confined | 113/118 (95.8%) | 163 / 0 / 0 | first and only round; implementer did not recognize the app (`research/14`) |
 | Conduit (round-4 release) and the round-2 novel tool, in the enforced clean room | web / CLI | as above | 99/101 · 397/397 | 570 / 0 / 6 · 1144 / 0 / 1 | implementer inside the isolated container; same outcomes as with a prompt-only barrier (`research/13`) |
 
@@ -65,7 +66,7 @@ What these numbers support:
   - On Conduit (development set), the tooling grew to capture what a real app's E2E suite checks: routing,
     error handling under faults, empty structure named by a public contract, environment-dependent layout.
   - **On eight held-out apps it scored 53% (v1), 56% (v2), 81.5% (v3), 93.1% (v4), 89.8% (v5), 87.5% (v6),
-    99.2% and 96.9% (v8).** Each clone reproduced its spec. Each round found the next layer of user-visible structure the abstraction lacked:
+    99.2% and 96.9% (v8), 98.4% (v9).** Each clone reproduced its spec. Each round found the next layer of user-visible structure the abstraction lacked:
     - titles, focus and messages;
     - then tables and description lists;
     - then regions and inline text;
