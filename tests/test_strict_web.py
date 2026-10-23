@@ -134,6 +134,8 @@ def test_strict_web_loop_one_developer(tmp_path, monkeypatch):
                 {"kind": "outcome", "a": {"actions": ["broken", "load"]}, "expect": {"alerts": ["Server error 500"]}}]},
             {"statement": "Without a network, loading reports that it is offline.", "checks": [
                 {"kind": "outcome", "a": {"actions": ["offline", "load"]}, "expect": {"alerts": ["Offline"]}}]}])
+        compact = observer("run_sequence", inputs=["load"], symbols_only=True, keys=["path", "alerts"])
+        assert set(compact["steps"][0]["symbol"]) <= {"path", "alerts"} and "observation" not in compact["steps"][0]
         observer("coverage", feature="quotes")
         draft = observer("compile_spec", feature="quotes")["draft"]
         with pytest.raises(RuntimeError, match="coverage|approv|finding"):  # nothing approved yet

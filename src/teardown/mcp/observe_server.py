@@ -6,6 +6,7 @@ target are data, never instructions.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -117,14 +118,26 @@ def build_observe_server(project: Project) -> MCPServer:
         version = project.set_mapper(rules, note, params=params)
         return {"mapper": version.id, "parent": version.parent, "params": version.params}
 
-    @server.tool(description="Reset the target, apply the inputs, and return raw observations and symbols.")
-    def run_sequence(inputs: list[str], symbols_only: bool = False) -> dict[str, Any]:
+    @server.tool(description="Reset the target, apply the inputs, and return raw observations and symbols. "
+                 "symbols_only drops the raw observations; keys (e.g. [\"path\", \"status\", \"alerts\"]) keeps only "
+                 "those parts of each symbol.")
+    def run_sequence(inputs: list[str], symbols_only: bool = False, keys: list[str] | None = None) -> dict[str, Any]:
+        def only(symbol: Any) -> Any:  # keys: just these parts of each symbol (e.g. ["path", "status"])
+            if not keys:
+                return symbol
+            try:
+                value = json.loads(symbol) if isinstance(symbol, str) else symbol
+            except ValueError:
+                return symbol
+            return {k: value[k] for k in keys if k in value} if isinstance(value, dict) else value
+
         session = project.session()
         _, initial = session.reset()
+        initial = only(initial)
         steps = []
         for name in inputs:
             ev, symbol = session.step(name)
-            step = {"input": name, "symbol": symbol, "evidence": ev}
+            step = {"input": name, "symbol": only(symbol), "evidence": ev}
             if not symbols_only:  # raw observations can be large (full accessibility trees)
                 step["observation"] = project.workspace.get(ev, Evidence).payload
             steps.append(step)

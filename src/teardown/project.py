@@ -406,6 +406,11 @@ class Project:
         return record, result
 
     def propose_claim(self, **kwargs: Any):
+        from teardown.core.model import ClaimKind
+
+        kind = kwargs.get("kind")
+        if kind is not None and kind not in {k.value for k in ClaimKind}:
+            raise ValueError(f"claim kind must be one of {sorted(k.value for k in ClaimKind)} (got {kind!r})")
         state = self.state
         return self.ledger.propose(reference=state.target, mapper=state.mapper, **kwargs)
 
@@ -893,12 +898,22 @@ class Project:
                          max_states=max_states, max_depth=max_depth, max_episodes=max_episodes, fill=fill,
                          describe=describe_symbol)
         self.define_actions(result["actions"])
+        # runs accumulate (one per role or start point): a later crawl adds screens, it does not replace earlier ones
+        previous = self._discovery(feature) or {"screens": {}, "transitions": [], "episodes": 0, "actions": {}}
+        seen = {json.dumps(t, sort_keys=True) for t in previous["transitions"]}
+        merged = {"screens": {**previous["screens"], **result["screens"]},
+                  "transitions": [*previous["transitions"],
+                                  *(t for t in result["transitions"] if json.dumps(t, sort_keys=True) not in seen)],
+                  "episodes": previous["episodes"] + result["episodes"], "truncated": result["truncated"],
+                  "actions": {**previous.get("actions", {}), **result["actions"]}}
         path = self.root / "discovery" / f"{feature}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(D.as_json(result), encoding="utf-8")
+        path.write_text(D.as_json(merged), encoding="utf-8")
         self.audit.append("ui-discovery", {}, {"feature": feature, "screens": len(result["screens"]),
+                                               "screens_total": len(merged["screens"]),
                                                "episodes": result["episodes"], "truncated": result["truncated"]})
         return {"screens": [{"id": k, **v} for k, v in result["screens"].items()],
+                "screens_total": len(merged["screens"]),
                 "transitions": len(result["transitions"]), "episodes": result["episodes"],
                 "truncated": result["truncated"], "actions_defined": sorted(result["actions"])}
 
@@ -983,7 +998,11 @@ class Project:
                                        path_glob_match(glob, e.split(" ")[1].split("?")[0])
                                        for e in t["network"])), None)
                 reach = screens.get(trigger["from"], {}).get("via", []) + [trigger["action"]] if trigger else None
+                observed = next((e for e in (trigger or {}).get("network", [])
+                                 if e.split(" ")[0] == method and path_glob_match(glob, e.split(" ")[1].split("?")[0])),
+                                None)
                 out.append({"item": item, "kind": "fault", "action": fault,
+                            **({"observed_as": observed} if observed else {}),
                             "reach": reach or "no discovered path makes this call; it may happen at start-up "
                                               "(put the fault first and reset) or after a form submission",
                             "suggest": "define the fault action and state a rule on what the UI shows with "

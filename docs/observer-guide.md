@@ -171,7 +171,9 @@ p.api_contract()                                                       # value-f
   was recorded right after typing at least three different values into it (`probe_web_field` without
   `submit`). An item counts as covered only when a recorded
   probe or rule observation shows that call (same method and path) made while a matching fault was active, so a
-  fault on a GET does not cover a POST to the same path. A control whose recorded clicks all came back `NA`
+  fault on a GET does not cover a POST to the same path. Coverage and `api_contract` name path segments after
+  your `api_templates` (`/api/recitals/{id}/pieces/{piece}`); observations keep the driver's generic `{id}`
+  (`/api/recitals/{id}/pieces/{id}`), and a fault suggestion shows both. A control whose recorded clicks all came back `NA`
   (off-screen, hidden) is not covered: explain it with `update_unknown`. Uncovered items become unknowns.
 - **Absence**: inside a nested expectation `null` means "must not be there":
   `{"controls": {"button:Delete": null}}` holds only when no Delete button exists. An empty object or list

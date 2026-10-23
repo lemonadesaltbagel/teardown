@@ -431,6 +431,11 @@ def test_history_ops_unclickable_elements_and_undefined_rule_actions(site, tmp_p
         assert (defined["op"], defined["role"], defined["name"]) == ("click", "link", "Go to B")
         found = project.discover_ui("nav", max_states=5, max_depth=2)  # the skip link no longer stops the crawl
         assert len(found["screens"]) >= 2
+        first = {sc["id"] for sc in found["screens"]}
+        again = project.discover_ui("nav", start=["to_b"], max_states=5, max_depth=1)  # another start point
+        assert again["screens_total"] >= len(first)  # a second run adds to the inventory, it does not replace it
+        with pytest.raises(ValueError, match="claim kind must be one of"):
+            project.propose_claim(feature="nav", kind="flow", statement="x", inputs=["to_b"], expect=[None])
         project.check_rules("nav", [{"statement": "The skip link cannot be used by a pointer.", "checks": [
             {"kind": "outcome", "a": {"actions": ["skip"]}, "expect": {"value": "NA"}}]}], workers=1)
         counts = project.coverage("nav", record_unknowns=False)["counts"]
