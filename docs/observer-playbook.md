@@ -60,7 +60,8 @@ State them in your own words, with checks:
 - **Every route, including the unhappy ones:** a missing record's page, empty results, and pages that a role
   may not see. Use `goto` with a made-up id.
 - **Data states:** every list with no rows, exactly one row (singular wording such as "1 item"), and several.
-  Coverage lists these per table.
+  Coverage lists these per table and per named list, including summary lists that a change elsewhere empties
+  (return every loan, resolve every issue): what replaces the list then?
 - **Sessions:** what a signed-in user sees when a request comes back 401 (an expired session): the message,
   and where they are sent.
 - **Roles:** sign in as each role on the same pages and compare which controls exist (`same`/`differs` on

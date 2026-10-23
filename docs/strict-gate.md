@@ -19,6 +19,23 @@ teardown audit-verify --project P
 Each `approve` shows what it covers and asks you to type the project's codename. It refuses to run without an
 interactive terminal.
 
+## In practice
+
+In the seventh held-out round (`research/21`) one person ran the gate on a real web spec of 64 rules and 94
+probe rows:
+
+- The observer was told it could not approve. It rewrote every statement the gate flagged as prose, so no
+  prose finding reached the person.
+- The person made three decisions: the expected-output class (180 findings) as `test-oracle`, the interface
+  class (11 action names) as `accessibility-name`, and the three coverage gaps with a note. Then one
+  `teardown release`.
+- Approvals are content-addressed. Running the same `approve` again records nothing new and says who already
+  approved.
+
+Ask the observer to finish with `compile_spec`, `review_spec` and prose rewrites before it stops: that is what
+keeps the review to a few class-level decisions. `tests/test_strict_web.py` runs this whole loop automatically,
+with approvals typed into a pseudo-terminal.
+
 ## Finding classes
 
 | class | where | typical content | approval |

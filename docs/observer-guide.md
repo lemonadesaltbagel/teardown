@@ -82,7 +82,8 @@ For web, Android and desktop targets, follow [observer-playbook.md](observer-pla
 `observe_target` MCP prompt).
 
 - `discover_ui(feature, start=[...])` crawls the app and defines `click[role:name]` and `fill[name]=sample`
-  actions. It records every screen and the path that reaches it.
+  actions. It records every screen and the path that reaches it. Rows of one table are explored through one
+  representative; a `click[role:name]` for another row defines itself the first time a rule check uses it.
 - `coverage` then lists every discovered control and field.
 - `suggest_probes(feature)` turns the gaps into ready-made next steps.
 
@@ -146,8 +147,10 @@ p.api_contract()                                                       # value-f
   `descriptions`; `v6`: no `aria-invalid` flag, row headers or groups; `v7`: no `outline` or `properties`).
 - Rules on UIs compare **sequences**: `{"actions": [...]}` on each side; restrict `keys` to what the rule is about
   (`controls`, `path`, `alerts`, `network`) so incidental text does not break the relation.
-- Field probes find length limits and classify refusals as client-side (submit disabled / no request) or
-  server-side (API 4xx).
+- Field probes find length limits, a minimum (`len_at_min`, `len_under_min`) as well as a maximum
+  (`len_at_max`, `len_over_max`), and classify refusals as client-side (submit disabled / no request) or
+  server-side. A value counts as refused when its submit ends differently from the known-good one: another
+  route or status message, an alert, an API 4xx, a dialog that stays open, or a field marked `aria-invalid`.
 - A shared self-hosted backend means episodes run one at a time; give each run a fresh reset.
 - `api_contract()` is released with the spec: endpoints, statuses and body *shapes* (no values). Query values are
   dropped; fold data-bearing path segments with `target_options={"api_templates": ["/api/articles/feed",
@@ -162,15 +165,18 @@ p.api_contract()                                                       # value-f
   makes matching API calls *as received by the observing browser* fail for the rest of the episode; put it before
   the steps that trigger the call and state rules about what the UI then shows. Cover every important endpoint with
   5xx, network failure and malformed-body probes. The server is never touched. `coverage` lists every observed
-  endpoint × fault class (5xx, network, malformed) automatically, plus each table's data states (none, one,
-  several), for apps with a sign-in, session expiry (a 401 fault), and each **live output**: a field whose typing
+  endpoint × fault class (5xx, network, malformed) automatically, plus the data states (none, one, several) of
+  each table and each named list, for apps with a sign-in, session expiry (a 401 fault), and each **live output**: a field whose typing
   changes the screen without a click (a preview, total or counter). A live output is covered once the screen
   was recorded right after typing at least three different values into it (`probe_web_field` without
   `submit`). An item counts as covered only when a recorded
   probe or rule observation shows that call (same method and path) made while a matching fault was active, so a
-  fault on a GET does not cover a POST to the same path. Uncovered items become unknowns.
+  fault on a GET does not cover a POST to the same path. A control whose recorded clicks all came back `NA`
+  (off-screen, hidden) is not covered: explain it with `update_unknown`. Uncovered items become unknowns.
 - **Absence**: inside a nested expectation `null` means "must not be there":
-  `{"controls": {"button:Delete": null}}` holds only when no Delete button exists.
+  `{"controls": {"button:Delete": null}}` holds only when no Delete button exists. An empty object or list
+  means "none": `{"controls": {}}` holds only when there are no controls, `{"alerts": []}` only when there is
+  no alert.
 - **Pending states**: `"mode": "hang"` holds matching calls unanswered, so the next observation shows the loading
   UI (placeholders, disabled buttons). A later `{"op": "fault", "fault": {"mode": "release", "then":
   "continue|abort|timeout|status", "status": 500}}` answers them and removes the hang.
