@@ -163,7 +163,10 @@ p.api_contract()                                                       # value-f
   the steps that trigger the call and state rules about what the UI then shows. Cover every important endpoint with
   5xx, network failure and malformed-body probes. The server is never touched. `coverage` lists every observed
   endpoint × fault class (5xx, network, malformed) automatically, plus each table's data states (none, one,
-  several) and, for apps with a sign-in, session expiry (a 401 fault). An item counts as covered only when a recorded
+  several), for apps with a sign-in, session expiry (a 401 fault), and each **live output**: a field whose typing
+  changes the screen without a click (a preview, total or counter). A live output is covered once the screen
+  was recorded right after typing at least three different values into it (`probe_web_field` without
+  `submit`). An item counts as covered only when a recorded
   probe or rule observation shows that call (same method and path) made while a matching fault was active, so a
   fault on a GET does not cover a POST to the same path. Uncovered items become unknowns.
 - **Absence**: inside a nested expectation `null` means "must not be there":

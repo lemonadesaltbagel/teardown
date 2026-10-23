@@ -734,3 +734,34 @@ def test_web_aria_v8_records_the_user_facing_playwright_surface(tmp_path):
     assert [c.id for c in CASES if not result[c.id]["web.aria/v8"]] == []  # every user-facing difference shows
     assert [c.id for c in SAME if result[c.id]["web.aria/v8"]] == []  # implementation differences do not
     assert sum(result[c.id]["web.aria/v7"] for c in CASES) == 17  # v7 unchanged: it records 17 of the 39
+
+
+def test_live_outputs_are_discovered_and_need_a_field_probe_without_submit(tmp_path):
+    root = tmp_path / "site"
+    root.mkdir()
+    (root / "form.html").write_text(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Net</title></head><body><main>'
+        '<h1>New net</h1><label>Width <input id="w"></label><label>Height <input id="h"></label>'
+        '<p id="out">Enter a size.</p><button>Save</button>'
+        '<script>const w = document.getElementById("w"), h = document.getElementById("h");'
+        'const ok = v => /^\\d+$/.test(v) && +v >= 1 && +v <= 50;'
+        'const show = () => document.getElementById("out").textContent ='
+        ' ok(w.value) && ok(h.value) ? "Area " + (w.value * h.value) + " m2" : "Enter a size.";'
+        'w.addEventListener("input", show); h.addEventListener("input", show);</script>'
+        '</main></body></html>')
+    local = LocalSite(root)
+    try:
+        project = Project(tmp_path / "p")
+        project.open_target("web:" + local.url("form.html"), purpose="research")
+        found = project.discover_ui("form", max_states=3, max_depth=1)
+        screen = next(s for s in found["screens"] if s["fields"])
+        assert screen["live_fields"] == ["textbox:Height", "textbox:Width"]
+        counts = project.coverage("form", record_unknowns=False)["counts"]
+        assert counts["live output textbox:Width"] == 0
+        call = next(s for s in project.suggest_probes("form") if s["item"] == "live output textbox:Width")["call"]
+        assert call["submit"] is None and call["prefix"] == ["fill[Height]=sample"]
+        project.probe_web_field("form", prefix=call["prefix"], role="textbox", name="Width", submit=None,
+                                kind="number", workers=1)
+        assert project.coverage("form", record_unknowns=False)["counts"]["live output textbox:Width"] >= 3
+    finally:
+        local.close()

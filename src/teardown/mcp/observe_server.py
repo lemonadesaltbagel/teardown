@@ -155,8 +155,10 @@ def build_observe_server(project: Project) -> MCPServer:
                  "`prefix` = named actions that reach the form; `submit` = the named action that submits it. "
                  "Boundary classes become named actions you can add to learn_flow's alphabet. When accepted values "
                  "change the outcome (computed results), say what acceptance looks like: accepted_if = {subset: {...}} "
-                 "and/or {text_contains: '...'}. Number fields skip the length search (their limits are ranges).")
-    def probe_web_field(feature: str, prefix: list[str], role: str, name: str, submit: str, kind: str = "text",
+                 "and/or {text_contains: '...'}. Number fields skip the length search (their limits are ranges). "
+                 "Without submit, the outcome is read right after typing (live previews, totals, counters).")
+    def probe_web_field(feature: str, prefix: list[str], role: str, name: str, submit: str | None = None,
+                        kind: str = "text",
                         classes: dict[str, str] | None = None, valid: str | None = None,
                         accepted_if: dict[str, Any] | None = None, boundary: bool | None = None) -> dict[str, Any]:
         return project.probe_web_field(feature, prefix=prefix, role=role, name=name, submit=submit, kind=kind,

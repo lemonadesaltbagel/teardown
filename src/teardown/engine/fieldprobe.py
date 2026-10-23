@@ -133,9 +133,10 @@ def _same_shape(result: dict[str, Any], reference: dict[str, Any]) -> bool:
     return not (result.get("invalid") and not reference.get("invalid"))
 
 
-def judge(reference: dict[str, Any] | None, accept=None):
+def judge(reference: dict[str, Any] | None, accept=None, *, live: bool = False):
     """(refused, describe) for one field: accepted means the observer's ``accept`` predicate holds, or else 'same
-    outcome as the known-good value'."""
+    outcome as the known-good value'. ``live`` (read right after typing, no submit): nothing is accepted or
+    refused; the classes grouped in one claim show the same screen."""
 
     def refused(result: dict[str, Any]) -> bool:
         if result.get("value") in ("DISABLED", "NA"):
@@ -149,12 +150,16 @@ def judge(reference: dict[str, Any] | None, accept=None):
         return bool(result.get("alerts") or result.get("invalid"))
 
     def describe(result: dict[str, Any]) -> str:
+        if live:
+            return "shows the same screen right after typing (as recorded in the check)"
         if result.get("value") == "DISABLED":
             return "is refused before submission (submit is disabled)"
         if result.get("value") == "NA":
             return "is refused before submission (submit is not offered)"
         if not refused(result):
-            return ("is accepted" if accept is not None else "is accepted (same outcome as the known-good value)")
+            return ("is accepted" if accept is not None else
+                    "is accepted (same outcome as the known-good value)" if reference is not None else
+                    "shows no alert or invalid field")
         detail = []
         if result.get("alerts"):
             detail.append(f"{len(result['alerts'])} alert(s)")

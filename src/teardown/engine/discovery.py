@@ -116,6 +116,15 @@ def _row_links(symbol: Any) -> dict[str, list[str]]:
     return out
 
 
+_OUTPUT_KEYS = ("text", "status", "alerts", "tables", "definitions")
+
+
+def output_of(symbol: Any) -> Any:
+    """What a screen shows apart from its controls: text, messages, tables. A change in it after typing alone (no
+    click) is a live output such as a preview, a total or a character count."""
+    return {k: symbol.get(k) for k in _OUTPUT_KEYS} if isinstance(symbol, dict) else symbol
+
+
 def summarize(symbol: Any) -> dict[str, Any]:
     controls = _controls(symbol)
     options = symbol.get("options", {}) if isinstance(symbol, dict) else {}
@@ -160,6 +169,7 @@ def crawl(open_session: Callable[[], Any], platform: str, *, start: list[tuple[s
         first = describe(session.observe()[1]) if not start else replay(start)
         key = screen_key(first)
         screens[key] = {**summarize(first), "via": [n for n, _ in start]}
+        outputs = {key: output_of(first)}
         signatures = {signature(first): key}
         queue = [(key, list(start))]
         truncated = False
@@ -176,6 +186,12 @@ def crawl(open_session: Callable[[], Any], platform: str, *, start: list[tuple[s
                 if isinstance(filled, dict):  # controls that a filled form enables
                     enabled = summarize(filled)["clickable"]
                     screens[key]["clickable_when_filled"] = sorted(set(enabled) - set(screens[key]["clickable"]))
+                    if output_of(filled) != outputs.get(key) and filled.get("path") == screens[key]["path"]:
+                        # typing alone changed what the screen shows: which fields drive it?
+                        fills = here[len(path):]
+                        live = [f for i, f in enumerate(screens[key]["fields"]) if episodes < max_episodes and
+                                output_of(replay([*path, *fills[:i], *fills[i + 1:]])) != output_of(filled)]
+                        screens[key]["live_fields"] = live or list(screens[key]["fields"])
             for control in sorted(set(screens[key]["clickable"]) | set(screens[key].get("clickable_when_filled", []))):
                 if episodes >= max_episodes or len(screens) >= max_states:
                     truncated = True
@@ -194,6 +210,7 @@ def crawl(open_session: Callable[[], Any], platform: str, *, start: list[tuple[s
                 transitions.append({"from": key, "action": step[0], "to": target, "network": network})
                 if target not in screens:
                     screens[target] = {**summarize(symbol), "via": [n for n, _ in [*here, step]]}
+                    outputs[target] = output_of(symbol)
                     queue.append((target, [*here, step]))
             if truncated:
                 break

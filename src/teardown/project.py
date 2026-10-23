@@ -923,12 +923,17 @@ class Project:
             for field in screen["fields"]:
                 role, name = split_control(field)
                 counts[f"field {field}"] = sum(1 for v, r, nm in touched if v == "fill" and nm == name)
+            for field in screen.get("live_fields", []):  # read right after typing, with at least three values
+                values = {named[seq[-1]].get("value") for seq in self._used_sequences(feature, table)
+                          if seq and (named.get(seq[-1]) or {}).get("op") == "fill"
+                          and named[seq[-1]].get("name") == split_control(field)[1]}
+                counts[f"live output {field}"] = len(values) if len(values) >= 3 else 0
         return counts
 
     def suggest_probes(self, feature: str, limit: int = 30) -> list[dict[str, Any]]:
         """Concrete next steps for the feature's coverage gaps: ready-made fault actions with a path that makes
         the call, field-probe arguments for unprobed fields, click paths for unexercised controls."""
-        from teardown.engine.discovery import split_control
+        from teardown.engine.discovery import fill_action, guess_kind, split_control
 
         report = self.coverage(feature, record_unknowns=False)
         found = self._discovery(feature) or {"screens": {}, "transitions": []}
@@ -970,6 +975,19 @@ class Project:
                                      "prefix": (screen or {}).get("via", []),
                                      "submit": f"click[{submit}]" if submit else None},
                             "suggest": "check prefix/submit (submit may need other fields filled first via prefix)"})
+            elif item.startswith("live output "):
+                control = item[len("live output "):]
+                role, name = split_control(control)
+                screen = next((sc for sc in screens.values() if control in sc.get("live_fields", [])), None) or {}
+                others = [fill_action("web", *split_control(f), screen.get("options", {}).get(f))
+                          for f in screen.get("fields", []) if f != control]
+                out.append({"item": item, "kind": "live-output",
+                            "call": {"tool": "probe_web_field", "role": role, "name": name, "submit": None,
+                                     "kind": guess_kind(name), "prefix": [*screen.get("via", []),
+                                                                         *(n for n, _ in others)]},
+                            "suggest": "typing here changes the screen without a click (a preview, total or "
+                                       "counter): probe it without submit so empty, out-of-range and malformed "
+                                       "values are recorded, then state the rule"})
             elif item.startswith("data state: table "):
                 name, state = item[len("data state: table "):].rsplit(": ", 1)
                 how = {"none": "filter or search so that nothing matches (or use an account with no records)",
@@ -1194,11 +1212,12 @@ class Project:
         """Field probing for any UI target (web, android, desktop)."""
         return self.probe_web_field(*args, **kwargs)
 
-    def probe_web_field(self, feature: str, *, prefix: list[str], role: str, name: str, submit: str,
+    def probe_web_field(self, feature: str, *, prefix: list[str], role: str, name: str, submit: str | None,
                         kind: str = "text", classes: dict[str, str] | None = None, valid: str | None = None,
                         boundary: bool | None = None, accepted_if: dict[str, Any] | None = None,
                         workers: int = 4) -> dict[str, Any]:
         """Probe one form field: every class (plus the length boundary) is filled after ``prefix`` and submitted.
+        Without ``submit`` the outcome is read right after typing: live outputs (previews, totals, counters).
 
         ``valid`` names a class known to be accepted, or is a literal value known to be accepted (added as class
         ``valid``); it defines the acceptance reference for the boundary search.
@@ -1235,7 +1254,7 @@ class Project:
         if boundary and valid:
             session = self._worker_session()
             try:
-                ref_inputs = [*prefix, fill_action(valid, values[valid])[0], submit]
+                ref_inputs = [*prefix, fill_action(valid, values[valid])[0], *([submit] if submit else [])]
                 reference = fp.outcome(describe_symbol(session.run(ref_inputs, use_cache=False)[0][-1]),
                                        values[valid], keys=keys)
 
@@ -1244,8 +1263,8 @@ class Project:
                     session.reset()
                     for step in prefix:
                         session.step(step)
-                    session.step(act_name, params=spec)
-                    return session.step(submit)[1]
+                    typed = session.step(act_name, params=spec)[1]
+                    return session.step(submit)[1] if submit else typed
 
                 boundary_found = fp.length_boundary(probe_once, kind, reference, accept=accept, keys=keys)
             finally:
@@ -1257,7 +1276,8 @@ class Project:
                 actions.update(extra)
                 values["len_at_max"] = extra[f"fill[{name}]=len_at_max"]["value"]
                 values["len_over_max"] = extra[f"fill[{name}]=len_over_max"]["value"]
-        probes = [fp.SequenceProbe(id=f"{feature}:{name}={cls}", inputs=[*prefix, f"fill[{name}]={cls}", submit],
+        probes = [fp.SequenceProbe(id=f"{feature}:{name}={cls}",
+                                   inputs=[*prefix, f"fill[{name}]={cls}", *([submit] if submit else [])],
                                    tags=["s:field", f"field:{name}", f"val:{kind}.{cls}"]) for cls in values]
         first = fp.run_sequences(self._worker_session, probes, workers=workers)
         second = {r.probe.id: r.symbol for r in fp.run_sequences(self._worker_session, probes, workers=workers)}
@@ -1276,7 +1296,7 @@ class Project:
         table = ProbeTable(
             feature=feature, target=self.state.target, mapper=self.state.mapper,
             actions={k: v for k, v in self.action_table().items() if k in {*prefix, submit, *actions}},
-            rows=[ProbeRow(action=submit, prefix=r.probe.inputs[:-1], expect=literal[r.probe.id],
+            rows=[ProbeRow(action=r.probe.inputs[-1], prefix=r.probe.inputs[:-1], expect=literal[r.probe.id],
                            tags=r.probe.tags, match="subset") for r in first if r.probe.id not in nondet],
             excluded={pid: "nondeterministic" for pid in sorted(nondet)},
         )
@@ -1291,7 +1311,7 @@ class Project:
         self._save(self.state.model_copy(update={"probes": {**self.state.probes, feature: table.id}}))
         reference_outcome = next((describe_symbol(r.symbol) for r in first
                                   if r.probe.id.endswith(f"={valid}")), None) if valid else None
-        is_refused, describe = fp.judge(reference_outcome, accept)
+        is_refused, describe = fp.judge(reference_outcome, accept, live=submit is None)
         import functools
 
         mined, mixed = mine(feature, "the form", first, exclude=nondet,

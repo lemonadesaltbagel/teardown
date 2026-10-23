@@ -54,6 +54,9 @@
   message, sort state, progress values, title attributes). A surface audit
   (`teardown.drivers.web.surface`) lists every difference a user-facing Playwright locator or assertion can
   see. v8 records all 39 and none of 7 implementation-only differences; v7 recorded 17.
+- Live outputs: discovery marks fields whose typing changes the screen without a click (previews, totals,
+  counters); coverage lists each as `live output` until the screen is recorded right after typing three
+  different values; `probe_web_field` reads the screen without `submit`, and `suggest_probes` proposes it.
 - `web.aria/v7`: an `invalid` control flag for `aria-invalid`, `row_headers`
   per table, and `groups` (named groups, radiogroups and toolbars with their controls).
 - Fault coverage counts an item only when a recorded observation shows that method and path called while a

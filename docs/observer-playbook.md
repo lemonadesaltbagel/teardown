@@ -33,6 +33,9 @@ either with a probe or rule or with a recorded reason. The tool names are the ob
 - Use classes that match the field: ranges as `min`, `max`, `over`, `under`; formats; empty; whitespace.
 - When accepted values change the result, pass `accepted_if` (`text_contains` or a `subset`).
 - Note each refusal message and its order. When several inputs are invalid, which message wins?
+- **Live outputs** (previews, totals, counters that change while you type): discovery marks their fields, and
+  coverage lists each as `live output`. Probe them **without** `submit`, so the screen is read right after
+  typing an empty, out-of-range or malformed value.
 
 ## 3. Faults (15% of the time)
 
