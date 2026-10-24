@@ -1,0 +1,34 @@
+name: release
+# Publishes to PyPI when a version tag (v1.2.3) is pushed. It uses PyPI trusted publishing: no token is stored.
+# One-time setup on pypi.org: add a (pending) trusted publisher for project "teardown" with owner
+# "lemonadesaltbagel", repository "teardown", workflow "release.yml" and environment "pypi".
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: The tag matches the package version
+        run: test "v$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)" = "${GITHUB_REF_NAME}"
+      - run: uv build
+      - run: uvx twine check dist/*
+      - name: The wheel installs and runs on its own
+        run: |
+          uv venv /tmp/check
+          VIRTUAL_ENV=/tmp/check uv pip install dist/*.whl
+          cd /tmp && TEARDOWN_HOME=/tmp/home /tmp/check/bin/teardown demo
+      - uses: actions/upload-artifact@v4
+        with: {name: dist, path: dist/}
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {name: dist, path: dist/}
+      - uses: pypa/gh-action-pypi-publish@release/v1

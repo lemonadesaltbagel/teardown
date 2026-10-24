@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Fetcher</title></head>
+<body><main>
+<h1>Quotes</h1>
+<button type="button" id="load">Load quotes</button>
+<div class="quotes-panel" style="min-height:24px"><ul id="list" aria-label="Quotes"></ul></div>
+<p id="loading" hidden>Loading…</p>
+<p id="status" role="status"></p>
+<p id="error" role="alert" hidden></p>
+</main>
+<script>
+// third-party-style example: fetches /quotes.json; distinct UI for HTTP errors, network failures and bad JSON;
+// the button is disabled and a loading line shown while the request is pending
+document.getElementById('load').onclick = async () => {
+  const err = document.getElementById('error'), list = document.getElementById('list');
+  const btn = document.getElementById('load'), loading = document.getElementById('loading');
+  err.hidden = true; list.innerHTML = ''; btn.disabled = true; loading.hidden = false;
+  try { await load(err, list); } finally { btn.disabled = false; loading.hidden = true; }
+};
+async function load(err, list) {
+  try {
+    const r = await fetch('/quotes.json?page=1');
+    if (!r.ok) { err.textContent = 'Server error ' + r.status; err.hidden = false; return; }
+    let data;
+    try { data = await r.json(); } catch (e) { err.textContent = 'Unreadable reply'; err.hidden = false; return; }
+    for (const q of data.quotes) { const li = document.createElement('li'); li.textContent = q; list.appendChild(li); }
+  } catch (e) { err.textContent = 'Offline'; err.hidden = false; }
+}
+</script></body></html>

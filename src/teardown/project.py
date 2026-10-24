@@ -1,0 +1,1682 @@
+"""Project: the dirty-side orchestration shared by the observe MCP server, the CLI and tests.
+
+Directory layout under the project root::
+
+    project.json      target spec, mapper, intake, gate config
+    workspace/        evidence, traces, models, drafts, claim/unknown ledgers, string corpus (dirty only)
+    audit.jsonl       hash-chained audit log
+    releases/         gate-released specs: the ONLY directory the clean side may read
+    tickets/          clean-side questions and gate-checked answers
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any, ClassVar
+from urllib.parse import urlparse
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from teardown.audit.log import AuditLog
+from teardown.core.ids import content_id
+from teardown.core.model import ContentAddressed, MapperRule, MapperVersion
+from teardown.core.store import Workspace
+from teardown.drivers.base import Driver
+from teardown.drivers.fake import open_fake
+from teardown.drivers.session import ObservationSession
+from teardown.engine.claims import ClaimLedger
+from teardown.engine.learner import LearnResult, learn
+from teardown.engine.mapper import Mapper, describe_symbol
+from teardown.gate.gate import (
+    GateConfig,
+    GateMode,
+    QuoteEntry,
+    SpecRelease,
+    make_codename,
+    release,
+    rename_symbol,
+    rename_text,
+    review,
+)
+from teardown.gate.verifier import Verifier
+from teardown.intake import Intake, Purpose, terms_digest, warnings_for
+from teardown.spec.draft import ModelRecord, ProbeRow, ProbeTable, SpecDraft
+
+
+class CoverageGateBlocked(PermissionError):
+    def __init__(self, feature: str, gaps: list[str]):
+        super().__init__(f"strict mode: feature {feature!r} has {len(gaps)} unacknowledged coverage gap(s); probe "
+                         f"them, or acknowledge them at a terminal with `teardown approve --coverage`: {gaps[:5]}")
+        self.gaps = gaps
+
+
+class DiscoveryRecord(ContentAddressed):
+    PREFIX: ClassVar[str] = "dsc"
+
+    cmd: str
+    target: str
+    data: dict[str, Any]
+
+
+def _portable_actions(actions: dict[str, dict[str, Any]], target_spec: str) -> dict[str, dict[str, Any]]:
+    """Web `goto` actions with the original's absolute origin become root-relative paths (portable to clones)."""
+    if not target_spec.startswith("web:"):
+        return actions
+    from urllib.parse import urlparse
+
+    origin = "{0.scheme}://{0.netloc}".format(urlparse(target_spec.removeprefix("web:")))
+    out = {}
+    for name, a in actions.items():
+        if a.get("op") == "goto" and isinstance(a.get("value"), str) and a["value"].startswith(origin):
+            a = {**a, "value": a["value"][len(origin):] or "/"}
+        out[name] = a
+    return out
+
+
+def _drop_masked_text(check):
+    """A folded claim covers several typed values; drop outcome lists that only match with the echo masked."""
+    expect = []
+    for e in check.expect:
+        if e is not None and "<input>" in e:
+            data = json.loads(e)
+            data = {k: v for k, v in data.items() if not (isinstance(v, list) and any("<input>" in str(x) for x in v))}
+            e = json.dumps(data, sort_keys=True, ensure_ascii=False)
+        expect.append(e)
+    return check.model_copy(update={"expect": expect})
+
+
+def _flatten(value: Any):
+    if isinstance(value, dict):
+        for k, v in value.items():
+            yield k
+            yield from _flatten(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _flatten(v)
+    elif isinstance(value, str):
+        yield value
+
+
+def open_driver(target_spec: str, actions: dict[str, dict[str, Any]] | None = None,
+                options: dict[str, Any] | None = None) -> Driver:
+    options = options or {}
+    if target_spec.startswith("fake:"):
+        return open_fake(target_spec)
+    if target_spec.startswith("cli:"):
+        from teardown.drivers.cli.driver import CliDriver
+        from teardown.drivers.cli.invocation import Invocation
+
+        table = {k: Invocation.model_validate(v) for k, v in (actions or {}).items()}
+        return CliDriver(target_spec, actions=table)
+    if target_spec.startswith("web:"):
+        from teardown.drivers.web.driver import Profile, WebAction, WebDriver
+
+        return WebDriver(target_spec, actions={k: WebAction.model_validate(v) for k, v in (actions or {}).items()},
+                         profile=Profile(**options["profile"]) if options.get("profile") else None,
+                         reset_command=options.get("reset_command"), reset_check_url=options.get("reset_check_url"),
+                         contract_selectors=options.get("contract_selectors"))
+    if target_spec.startswith("desktop:"):
+        from teardown.drivers.desktop.driver import DesktopAction, DesktopDriver
+
+        return DesktopDriver(target_spec, {k: DesktopAction.model_validate(v) for k, v in (actions or {}).items()},
+                             options)
+    if target_spec.startswith("android:"):
+        from teardown.drivers.android.driver import AndroidAction, AndroidDriver
+
+        return AndroidDriver(target_spec, {k: AndroidAction.model_validate(v) for k, v in (actions or {}).items()},
+                             options)
+    raise ValueError(f"no driver for {target_spec!r} (fake:, cli:, web:, desktop: and android: are available)")
+
+
+def default_mapper(target_spec: str, target: str) -> MapperVersion:
+    if target_spec.startswith("cli:"):
+        return MapperVersion(target=target, builtin="cli.behavior/v1", note="CLI behavior-level abstraction")
+    if target_spec.startswith("web:"):
+        return MapperVersion(target=target, builtin="web.aria/v10", note="structured accessibility snapshot")
+    if target_spec.startswith("desktop:"):
+        return MapperVersion(target=target, builtin="desktop.a11y/v1", note="structured AT-SPI snapshot")
+    if target_spec.startswith("android:"):
+        return MapperVersion(target=target, builtin="android.a11y/v3", note="structured accessibility dump")
+    return MapperVersion(target=target, note="identity mapper (no rules yet)")
+
+
+
+def _contract_path(path: str, templates: list[str]) -> str:
+    """Observed API path -> contract path: the first matching template ('{name}' matches one segment), query
+    values dropped (keys kept)."""
+    base, _, query = path.partition("?")
+    segments = base.strip("/").split("/")
+    for template in templates:
+        parts = template.strip("/").split("/")
+        if len(parts) == len(segments) and all(p == s or (p.startswith("{") and p.endswith("}"))
+                                               for p, s in zip(parts, segments, strict=True)):
+            base = "/" + "/".join(parts)
+            break
+    else:  # no declared template: segments carrying digits are record ids (b7, lock-3, 2026-q1), API versions not
+        base = "/" + "/".join("{id}" if any(c.isdigit() for c in s) and s != "{id}" and not re.fullmatch(r"v\d+", s)
+                              else s for s in segments)
+    if query:
+        keys = sorted({kv.partition("=")[0] for kv in query.split("&") if kv})
+        base += "?" + "&".join(f"{k}={{}}" for k in keys)
+    return base
+
+class ProjectState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_spec: str
+    target: str
+    intake: str
+    mapper: str
+    gate: GateConfig
+    models: dict[str, str] = Field(default_factory=dict, description="feature -> latest model record id")
+    probes: dict[str, str] = Field(default_factory=dict, description="feature -> latest probe table id")
+    rules: dict[str, str] = Field(default_factory=dict, description="feature -> latest rule table id")
+    actions: dict[str, dict[str, Any]] = Field(default_factory=dict, description="named actions (invocations)")
+    coverage: dict[str, dict[str, Any]] = Field(default_factory=dict, description="feature -> last coverage report")
+    coverage_inventory: dict[str, dict[str, list[str]]] = Field(
+        default_factory=dict, description="feature -> the observer's own inventory items, kept across calls")
+    coverage_approvals: dict[str, dict[str, Any]] = Field(
+        default_factory=dict, description="feature -> {gaps, approved_by, note}: coverage gaps a human acknowledged")
+    target_options: dict[str, Any] = Field(default_factory=dict,
+                                           description="driver options, e.g. reset_command, reset_check_url, "
+                                                       "contract_selectors, profile (web determinism profile "
+                                                       "overrides such as asset_hosts)")
+
+
+def path_glob_match(glob: str, path: str) -> bool:
+    from teardown.drivers.web.driver import path_glob
+
+    return path_glob(glob)(path)
+
+
+def fault_class(f: dict[str, Any]) -> str | None:
+    """Fault action -> coverage class: 5xx | network | malformed (None for hang/4xx)."""
+    mode = f.get("mode", "status")
+    if mode == "status":
+        return "5xx" if int(f.get("status", 500)) >= 500 else None
+    return {"abort": "network", "timeout": "network", "hang": None, "malformed": "malformed"}.get(mode)
+
+
+_SIGN_OUT = re.compile(r"\b(sign|log)\s?-?out\b", re.IGNORECASE)
+_STATUS_HEADER = re.compile(r"\b(status|state|stage)\b", re.IGNORECASE)
+
+
+def _record_route(path: str) -> tuple[str, str | None]:
+    """'/recitals/4/edit?x=1' -> ('/recitals/*/edit', '4'): segments with a digit are record ids."""
+    parts = [p for p in path.split("?", 1)[0].split("/") if p]
+    ids = [p for p in parts if any(c.isdigit() for c in p)]
+    return "/" + "/".join("*" if any(c.isdigit() for c in p) else p for p in parts), (ids[-1] if ids else None)
+
+
+def _signed_in_prefix(seq: list[str], named: dict[str, dict[str, Any]]) -> tuple[bool, list[str]]:
+    """(whether the sequence ends signed in, the steps up to its last sign-in). A sign-in is a password fill
+    followed by a click; a click on a sign-out control ends the session."""
+    signed, pending, prefix = False, False, []
+    for i, n in enumerate(seq):
+        spec = named.get(n) or {}
+        op = spec.get("op") or spec.get("action")
+        name = spec.get("name") or ""
+        if op == "fill" and "password" in name.lower():
+            pending = True
+        elif op == "click" and _SIGN_OUT.search(name):
+            signed, pending = False, False
+        elif op == "click" and pending:
+            signed, pending, prefix = True, False, seq[: i + 1]
+    return signed, prefix
+
+
+def _named_lists(outline: list[str]) -> dict[str, int]:
+    """Named lists in a web.aria/v8 outline -> how many items each holds."""
+    out: dict[str, int] = {}
+    for i, line in enumerate(outline):
+        m = re.match(r'^( *)list "(.+)"', line)
+        if not m:
+            continue
+        depth = len(m[1])
+        n = 0
+        for child in outline[i + 1:]:
+            indent = len(child) - len(child.lstrip(" "))
+            if indent <= depth:
+                break
+            n += indent == depth + 2 and child.lstrip().startswith("listitem")
+        out[m[2]] = n
+    return out
+
+
+class Project:
+    def __init__(self, root: str | Path):
+        self.root = Path(root)
+        self.workspace = Workspace(self.root / "workspace")
+        from teardown.audit.signing import Signer
+
+        # The dirty zone's signing key lives with the project; the clean side never receives it.
+        self.signer = Signer(self.root / "keys" / "observer.ed25519.pem")
+        self.audit = AuditLog(self.root / "audit.jsonl", signer=self.signer)
+        self.releases_dir = self.root / "releases"
+        self.tickets_dir = self.root / "tickets"
+        self.ledger = ClaimLedger(self.workspace, self.audit)
+        self._session: ObservationSession | None = None
+
+    # -- state -------------------------------------------------------------------------------------------------
+    @property
+    def state(self) -> ProjectState:
+        return ProjectState.model_validate_json((self.root / "project.json").read_text(encoding="utf-8"))
+
+    def _save(self, state: ProjectState) -> None:
+        (self.root / "project.json").write_text(state.model_dump_json(indent=1), encoding="utf-8")
+
+    # -- intake and target -------------------------------------------------------------------------------------
+    def open_target(
+        self,
+        target_spec: str,
+        *,
+        purpose: Purpose | str,
+        jurisdiction: str = "",
+        account: str = "",
+        terms_text: str | None = None,
+        owner_declaration: str | None = None,
+        max_actions_per_second: float | None = None,
+        strict: bool = False,
+        real_names: list[str] | None = None,
+        target_options: dict[str, Any] | None = None,
+    ) -> tuple[Intake, list[str]]:
+        driver = open_driver(target_spec, None, target_options)
+        target = driver.target_fingerprint()
+        try:
+            purpose = Purpose(purpose)
+        except ValueError:
+            driver.close()
+            raise ValueError(f"purpose must be one of {[p.value for p in Purpose]} (got {purpose!r})") from None
+        intake = Intake(
+            target=target,
+            target_spec=target_spec,
+            purpose=purpose,
+            jurisdiction=jurisdiction,
+            account=account,
+            terms_sha256=terms_digest(terms_text),
+            owner_declaration=owner_declaration,
+            max_actions_per_second=max_actions_per_second,
+        )
+        self.workspace.put(intake)
+        previous = self.state if (self.root / "project.json").exists() else None
+        if previous is not None and previous.gate.mode is GateMode.STRICT and not strict:
+            driver.close()
+            raise PermissionError("this project is in strict mode; reopening the target cannot relax it")
+        mapper = default_mapper(target_spec, target)
+        self.workspace.put(mapper)
+        gate = GateConfig(
+            mode=GateMode.STRICT if strict else GateMode.STANDARD,
+            codename=make_codename(target),
+            denylist=sorted(set(real_names or [])),
+        )
+        self.root.mkdir(parents=True, exist_ok=True)
+        state = ProjectState(target_spec=target_spec, target=target, intake=intake.id, mapper=mapper.id, gate=gate,
+                             target_options=dict(target_options or {}))
+        if previous is not None and previous.target_spec == target_spec:
+            # Reopening the same target (new options, a new intake): keep the work done so far. A mapper the
+            # observer built stays; so do approvals and quotes, which are tied to the same codename.
+            keep_gate = previous.gate.codename == gate.codename
+            state = state.model_copy(update={
+                "mapper": previous.mapper, "models": previous.models, "probes": previous.probes,
+                "rules": previous.rules, "actions": previous.actions, "coverage": previous.coverage,
+                "coverage_approvals": previous.coverage_approvals,
+                "coverage_inventory": previous.coverage_inventory,
+                "gate": gate.model_copy(update={"quotes": previous.gate.quotes,
+                                                "approvals": previous.gate.approvals}) if keep_gate else gate})
+        self._save(state)
+        notes = warnings_for(intake)
+        self.audit.append(
+            "intake",
+            {"intake": intake.id, "target": target},
+            {"purpose": intake.purpose, "jurisdiction": jurisdiction, "gate_mode": gate.mode, "warnings": notes},
+        )
+        driver.close()
+        return intake, notes
+
+    def set_mapper(self, rules: list[MapperRule | dict[str, Any]] | None = None, note: str = "", *,
+                   params: dict[str, Any] | None = None) -> MapperVersion:
+        """New mapper version: ``rules`` replace the current rules (None keeps them); ``params`` are merged into the
+        built-in abstraction's parameters (e.g. ``{"mask_dates": True}`` for web.aria/v1)."""
+        state = self.state
+        current = self.workspace.get(state.mapper, MapperVersion)
+        if rules is None:
+            rules = list(current.rules)
+        version = MapperVersion(
+            target=state.target,
+            builtin=current.builtin,
+            params={**(current.params or {}), **(params or {})},
+            rules=[r if isinstance(r, MapperRule) else MapperRule.model_validate(r) for r in rules],
+            parent=state.mapper,
+            note=note,
+        )
+        self.workspace.put(version)
+        self._save(state.model_copy(update={"mapper": version.id}))
+        self.audit.append("mapper-version", {"mapper": version.id}, {"parent": state.mapper, "rules": len(rules)})
+        self._reset_session()
+        return version
+
+    def action_table(self) -> dict[str, dict[str, Any]]:
+        """Named actions plus every probe of every probe table (claims and tests refer to probes by id)."""
+        state = self.state
+        table = dict(state.actions)
+        for table_id in state.probes.values():
+            table.update(self.workspace.get(table_id, ProbeTable).actions)
+        from teardown.engine.rules import RuleTable
+
+        for table_id in state.rules.values():
+            table.update(self.workspace.get(table_id, RuleTable).actions)
+        return table
+
+    def define_actions(self, actions: dict[str, dict[str, Any]]) -> None:
+        if self.state.target_spec.startswith("web:"):
+            from teardown.drivers.web.driver import WebAction as Model
+        elif self.state.target_spec.startswith("desktop:"):
+            from teardown.drivers.desktop.driver import DesktopAction as Model
+        elif self.state.target_spec.startswith("android:"):
+            from teardown.drivers.android.driver import AndroidAction as Model
+        else:
+            from teardown.drivers.cli.invocation import Invocation as Model
+
+        validated = {k: Model.model_validate(v).model_dump(mode="json") for k, v in actions.items()}
+        state = self.state
+        self._save(state.model_copy(update={"actions": {**state.actions, **validated}}))
+        self.workspace.add_supplied([str(x) for v in validated.values() for x in _flatten(v)])
+        self._reset_session()
+
+    def _reset_session(self) -> None:
+        if self._session:
+            self._session.close()
+            self._session = None
+
+    def mapper(self) -> Mapper:
+        return Mapper(self.workspace.get(self.state.mapper, MapperVersion))
+
+    def session(self) -> ObservationSession:
+        if self._session is None or self._session.mapper.id != self.state.mapper:
+            state = self.state
+            intake = self.workspace.get(state.intake, Intake)
+            self._session = ObservationSession(
+                self.workspace,
+                open_driver(state.target_spec, self.action_table(), state.target_options),
+                self.mapper(),
+                max_actions_per_second=intake.max_actions_per_second,
+            )
+            self.audit.append(
+                "observation-session",
+                {"target": state.target, "mapper": state.mapper},
+                {"session": self._session.session_id, "driver": self._session.driver.name},
+            )
+        return self._session
+
+    # -- learning, claims, spec --------------------------------------------------------------------------------
+    def learn(self, feature: str, alphabet: list[str], **kwargs: Any) -> tuple[ModelRecord, LearnResult]:
+        result = learn(self.session(), alphabet, name=feature, **kwargs)
+        state = self.state
+        record = ModelRecord(
+            feature=feature,
+            target=state.target,
+            mapper=state.mapper,
+            model=result.model,
+            algorithm=result.algorithm,
+            budget=result.budget,
+            completeness=result.completeness,
+        )
+        self.workspace.put(record)
+        self._save(state.model_copy(update={"models": {**state.models, feature: record.id}}))
+        self.audit.append(
+            "model-learned",
+            {"model": record.id, "mapper": state.mapper},
+            {"feature": feature, "states": len(result.model.states), "budget": result.budget,
+             "conflicts": len(result.conflicts), "resets": result.stats["session"]["resets"]},
+        )
+        if result.conflicts:
+            self.ledger.record_unknown(
+                feature,
+                f"{len(result.conflicts)} nondeterministic observation(s) under mapper {state.mapper}",
+                ["calibrate noise with timing jitter", "refine the mapper (split or mask)"],
+            )
+        return record, result
+
+    def propose_claim(self, **kwargs: Any):
+        from teardown.core.model import ClaimKind
+
+        kind = kwargs.get("kind")
+        if kind is not None and kind not in {k.value for k in ClaimKind}:
+            raise ValueError(f"claim kind must be one of {sorted(k.value for k in ClaimKind)} (got {kind!r})")
+        state = self.state
+        return self.ledger.propose(reference=state.target, mapper=state.mapper, **kwargs)
+
+    def falsify_claim(self, claim_id: str, repeats: int = 3):
+        return self.ledger.falsify(claim_id, self.session(), repeats=repeats)
+
+    def retract_rule(self, feature: str, rule_id: str, reason: str) -> int:
+        """Remove a rule from the feature's rule table (e.g. superseded by a reworded one). The retraction and its
+        reason are audited; returns the number of rules left."""
+        from teardown.engine.rules import RuleTable
+
+        state = self.state
+        if feature not in state.rules:
+            raise KeyError(f"no rules for feature {feature!r}")
+        table = self.workspace.get(state.rules[feature], RuleTable)
+        kept = [r for r in table.rules if r.id != rule_id]
+        if len(kept) == len(table.rules):
+            raise KeyError(f"no rule {rule_id} in feature {feature!r}")
+        new = RuleTable(feature=table.feature, target=table.target, mapper=table.mapper, actions=table.actions,
+                        rules=kept)
+        self.workspace.put(new)
+        self._save(state.model_copy(update={"rules": {**state.rules, feature: new.id}}))
+        self.audit.append("rule-retracted", {"rules": new.id}, {"feature": feature, "rule": rule_id,
+                                                                "reason": reason})
+        gone = next(r for r in table.rules if r.id == rule_id)
+        for u in self.ledger.unknowns().values():  # a conflict raised by the retracted rule no longer stands
+            if (u.identity.feature == feature and u.status == "open"
+                    and u.identity.question.startswith(f"documentation/behavior conflict: '{gone.statement}'")):
+                self.update_unknown(u.id, "resolved", f"rule retracted: {reason}")
+        return len(kept)
+
+    def update_unknown(self, unknown_id: str, status: str, note: str = "") -> dict[str, Any]:
+        """Mark an unknown investigating / resolved / out-of-scope (or reopen it), with a note saying why. Resolved
+        unknowns stay in the ledger and the audit log but are no longer released; out-of-scope ones are released
+        (the implementer should know what was not observed)."""
+        from teardown.core.model import UnknownStatus
+
+        unknowns = self.workspace.load_unknowns()
+        if unknown_id not in unknowns:
+            raise KeyError(unknown_id)
+        unknown = unknowns[unknown_id]
+        unknown.status = UnknownStatus(status)
+        unknown.note = note
+        self.workspace.save_unknowns(unknowns)
+        self.audit.append("unknown-updated", {"unknown": unknown_id}, {"status": unknown.status.value, "note": note})
+        return unknown.model_dump(mode="json")
+
+    def blocked_hosts(self, actions: list[str] | None = None) -> list[dict[str, str]]:
+        """Third-party hosts the web determinism profile refused during one episode (reset + ``actions``): which
+        stylesheets, fonts or scripts the app tried to load. Candidates for ``profile.asset_hosts`` when layout
+        depends on them."""
+        state = self.state
+        if not state.target_spec.startswith("web:"):
+            raise ValueError("blocked_hosts is for web targets")
+        from teardown.drivers.base import Action
+
+        driver = open_driver(state.target_spec, self.action_table(), state.target_options)
+        try:
+            driver.reset()
+            for name in actions or []:
+                driver.step(Action(name=name))
+            return [{"host": h, "type": t} for h, t in sorted(driver.blocked)]
+        finally:
+            driver.close()
+
+    def _flag_clock_text(self, feature: str, probes: Any, rule_table: Any) -> None:
+        """Calendar dates in expected UI text usually come from a clock (server creation times) and drift between
+        observation and verification. Unless the abstraction masks them, say so as an unknown."""
+        if not self.state.target_spec.startswith("web:"):
+            return
+        version = self.workspace.get(self.state.mapper, MapperVersion)
+        if not (version.builtin or "").startswith("web.aria/"):
+            return
+        if (version.params or {}).get("mask_dates"):  # masked now: an earlier clock unknown is answered
+            for u in self.ledger.unknowns().values():
+                if u.identity.feature == feature and u.status == "open" and "calendar dates" in u.identity.question:
+                    self.update_unknown(u.id, "resolved", "dates are masked (web.aria mask_dates)")
+            return
+        from teardown.engine.abstractions import CALENDAR_DATE
+
+        blob = " ".join(json.dumps(x.model_dump(mode="json")) for x in (probes, rule_table) if x is not None)
+        dates = sorted(set(CALENDAR_DATE.findall(blob)))
+        if dates:
+            self.ledger.record_unknown(
+                feature, f"Expected UI text contains calendar dates ({', '.join(dates[:3])}): if they come from a "
+                         "clock (e.g. creation times) they drift and verification turns inconclusive; mask them "
+                         "(web.aria param mask_dates) or confirm they are fixed data.",
+                ["re-run a date-bearing check on another day", "set_mapper(params={'mask_dates': True})"])
+
+    def compile_spec(self, feature: str) -> SpecDraft:
+        state = self.state
+        feature_claims = [c for c in self.ledger.all().values() if c.identity.feature == feature]
+        known = feature in state.models or feature in state.probes or feature in state.rules
+        if not known and not feature_claims:
+            raise KeyError(f"nothing learned, probed or claimed for feature {feature!r}")
+        record = self.workspace.get(state.models[feature], ModelRecord) if feature in state.models else None
+        probes = self.workspace.get(state.probes[feature], ProbeTable) if feature in state.probes else None
+        from teardown.engine.rules import RuleTable
+
+        rule_table = self.workspace.get(state.rules[feature], RuleTable) if feature in state.rules else None
+        self._flag_clock_text(feature, probes, rule_table)
+        version = self.workspace.get(state.mapper, MapperVersion)
+        abstraction = {"builtin": version.builtin, "params": version.params} if version.builtin else {}
+        claims = [c for c in self.ledger.all().values() if c.identity.feature == feature]
+        unknowns = [u for u in self.ledger.unknowns().values()
+                    if u.identity.feature == feature and u.status != "resolved"]
+        draft = SpecDraft(
+            feature=feature,
+            target=state.target,
+            mapper=(record.mapper if record else probes.mapper if probes else
+                    rule_table.mapper if rule_table else state.mapper),
+            abstraction=abstraction,
+            model=record,
+            probes=probes,
+            rules=rule_table,
+            actions=_portable_actions(state.actions, state.target_spec),
+            api=self.api_contract() if state.target_spec.startswith("web:") else None,
+            markup_contract=state.target_options.get("contract_selectors") if state.target_spec.startswith(
+                "web:") else None,
+            claims=sorted(claims, key=lambda c: c.id),
+            unknowns=sorted(unknowns, key=lambda u: u.id),
+        )
+        self.workspace.put(draft)
+        return draft
+
+    def review_spec(self, draft_id: str):
+        draft = self.workspace.get(draft_id, SpecDraft)
+        return review(draft, self.workspace.corpus(), self.state.gate, self.workspace.supplied())
+
+    def coverage_gaps(self, feature: str) -> list[str]:
+        report = self.state.coverage.get(feature)
+        return ["coverage was never measured"] if report is None else list(report.get("uncovered", []))
+
+    def approve_findings(self, draft_id: str, approved_by: str, compat_reason: str, *,
+                         finding_ids: list[str] | None = None, cls: str | None = None, kind: str = "verbatim",
+                         note: str = "") -> list[str]:
+        """Record approvals for gate findings of a draft: listed findings, or (``cls``) a whole class of one kind.
+        Prose findings can only be approved one by one. Meant for a human at the gate (`teardown approve`)."""
+        from teardown.gate.gate import CLASS_APPROVABLE, COMPAT_REASONS, GateApproval
+
+        if not approved_by.strip():
+            raise ValueError("approved_by must name the person approving")
+        if compat_reason not in COMPAT_REASONS:
+            raise ValueError(f"compat_reason must be one of {COMPAT_REASONS}")
+        _, report = self.review_spec(draft_id)
+        known = {f.id: f for f in report.findings}
+        new: list[GateApproval] = []
+        if cls is not None:
+            if finding_ids:
+                raise ValueError("give either finding ids or a class, not both")
+            if cls not in CLASS_APPROVABLE:
+                raise ValueError(f"{cls!r} findings are approved one at a time (class approval is for "
+                                 f"{sorted(CLASS_APPROVABLE)})")
+            new.append(GateApproval(scope="class", cls=cls, kind=kind, compat_reason=compat_reason,
+                                    approved_by=approved_by, note=note))
+        else:
+            missing = [i for i in finding_ids or [] if i not in known]
+            if missing or not finding_ids:
+                raise KeyError(f"not findings of this draft: {missing}" if missing else "no findings named")
+            new = [GateApproval(scope="finding", finding=i, compat_reason=compat_reason, approved_by=approved_by,
+                                note=note) for i in finding_ids]
+        state = self.state
+        existing = {a.id for a in state.gate.approvals}
+        added = [a for a in new if a.id not in existing]
+        self._save(state.model_copy(update={"gate": state.gate.model_copy(
+            update={"approvals": [*state.gate.approvals, *added]})}))
+        for a in added:
+            covered = [f.id for f in report.findings if a.covers(f)]
+            self.audit.append("gate-approval", {"draft": draft_id},
+                              {**a.model_dump(mode="json"), "approval": a.id, "covers": covered})
+        return [a.id for a in added]
+
+    def approve_coverage_gaps(self, feature: str, approved_by: str, note: str = "") -> list[str]:
+        """Acknowledge the feature's current coverage gaps (they are released as unknowns). New gaps need a new
+        acknowledgement."""
+        if not approved_by.strip():
+            raise ValueError("approved_by must name the person approving")
+        gaps = self.coverage_gaps(feature)
+        state = self.state
+        approvals = {**state.coverage_approvals, feature: {"gaps": gaps, "approved_by": approved_by, "note": note}}
+        self._save(state.model_copy(update={"coverage_approvals": approvals}))
+        self.audit.append("coverage-gaps-approved", {}, {"feature": feature, "gaps": gaps, "approved_by": approved_by,
+                                                          "note": note})
+        return gaps
+
+    def open_coverage_gaps(self, feature: str) -> list[str]:
+        """Uncovered items of the last coverage run that nobody has explained: their gap unknown is still open
+        (``update_unknown(id, "out-of-scope" | "resolved", reason)`` explains one)."""
+        report = self.state.coverage.get(feature)
+        if report is None:
+            return []
+        prefix = "not exercised by any probe or rule: "
+        explained = {u.identity.question[len(prefix):] for u in self.ledger.unknowns().values()
+                     if u.identity.feature == feature and u.identity.question.startswith(prefix)
+                     and u.status != "open"}
+        return [g for g in report.get("uncovered", []) if g not in explained]
+
+    def release_spec(self, draft_id: str, approved_by: str | None = None, *,
+                     accept_gaps: str | None = None) -> SpecRelease:
+        """Release a draft through the gate.
+
+        Strict mode: nothing passed here approves anything. Findings and coverage gaps need recorded approvals
+        (``approve_findings`` / ``approve_coverage_gaps``, i.e. `teardown approve` at a terminal), and coverage
+        must have been measured.
+
+        Standard mode: ``approved_by`` only names who released. If coverage was measured and items are still
+        uncovered and unexplained, the release is refused unless ``accept_gaps`` gives the reason to ship them as
+        unknowns (recorded in the audit log). Exercise them (``suggest_probes``) or explain each one instead."""
+        draft = self.workspace.get(draft_id, SpecDraft)
+        state = self.state
+        open_gaps: list[str] = []
+        if state.gate.mode is GateMode.STRICT:
+            if approved_by or accept_gaps:
+                raise ValueError("strict mode: approvals are recorded with `teardown approve` at a terminal, not "
+                                 "passed to release_spec")
+            if draft.feature in state.coverage:  # judge the gaps as they are now, not as of the last coverage call
+                self.coverage(draft.feature, record_unknowns=False)
+                state = self.state
+            gaps = self.coverage_gaps(draft.feature)
+            acknowledged = set((state.coverage_approvals.get(draft.feature) or {}).get("gaps", []))
+            strict_open = [g for g in gaps if g not in acknowledged]
+            if strict_open:
+                raise CoverageGateBlocked(draft.feature, strict_open)
+        else:
+            open_gaps = self.open_coverage_gaps(draft.feature)
+            if open_gaps and not (accept_gaps or "").strip():
+                raise ValueError(
+                    f"{len(open_gaps)} coverage item(s) are neither exercised nor explained, e.g. {open_gaps[:5]}. "
+                    "Exercise them (suggest_probes lists next steps), explain each with update_unknown "
+                    "(out-of-scope + reason), or release with accept_gaps='<why these ship as unknowns>'.")
+        rel = release(draft, self.workspace.corpus(), self.state.gate, self.releases_dir, approved_by=approved_by,
+                      supplied=self.workspace.supplied())
+        self.audit.append(
+            "spec-release",
+            {"release": rel.id, "draft": draft.id},
+            {"mode": rel.mode, "findings": len(rel.report.findings), "approved_by": rel.report.approved_by,
+             "previous": rel.previous,
+             **({"accepted_gaps": len(open_gaps), "accept_gaps_reason": accept_gaps} if open_gaps else {})},
+        )
+        return rel
+
+    def add_quote(self, text: str, compat_reason: str, approved_by: str) -> None:
+        state = self.state
+        quotes = [*state.gate.quotes, QuoteEntry(text=text, compat_reason=compat_reason, approved_by=approved_by)]
+        self._save(state.model_copy(update={"gate": state.gate.model_copy(update={"quotes": quotes})}))
+        self.audit.append("quote-approved", {}, {"compat_reason": compat_reason, "approved_by": approved_by})
+
+    def approve_observed_output(self, feature: str, approved_by: str, *, flags: tuple[str, ...] = ("--help", "-h",
+                                "--version"), action_ids: list[str] | None = None,
+                                compat_reason: str = "user-required") -> list[str]:
+        """Approve the stdout of selected probes as functional quotes (byte-exact output the behavior requires,
+        e.g. help and usage text). Selection: actions whose argv contains one of ``flags``, or explicit ids."""
+        from teardown.engine.mapper import describe_symbol as parse
+        from teardown.engine.rules import RuleTable
+
+        state = self.state
+        table = self.action_table()
+        wanted = set(action_ids or []) | {k for k, a in table.items()
+                                          if any(f in (a.get("argv") or [])[1:] for f in flags)}
+        outputs: dict[str, str] = {}
+        if feature in state.probes:
+            for row in self.workspace.get(state.probes[feature], ProbeTable).rows:
+                if row.action in wanted:
+                    outputs[row.action] = row.expect
+        if feature in state.rules:
+            for rule in self.workspace.get(state.rules[feature], RuleTable).rules:
+                for c in rule.checks:
+                    for aid, sym in ((c.a, c.observed_a), (c.b, c.observed_b)):
+                        if aid in wanted and sym:
+                            outputs[aid] = sym
+        texts = sorted({out["stdout"] for out in map(parse, outputs.values())
+                        if isinstance(out, dict) and isinstance(out.get("stdout"), str) and out["stdout"].strip()})
+        for text in texts:
+            self.add_quote(text, compat_reason, approved_by)
+        return texts
+
+    # -- CLI probing -------------------------------------------------------------------------------------------
+    def max_workers(self, requested: int) -> int:
+        """Episodes may only run in parallel when each one has isolated state. A shared self-hosted backend (a
+        `reset_command` target) is one state: parallel workers would reset each other mid-episode."""
+        state = self.state
+        if state.target_options.get("reset_command") or state.target_spec.startswith("android:"):
+            return 1  # one shared backend / one device: episodes must not overlap
+        return requested
+
+    def _worker_session(self) -> ObservationSession:
+        state = self.state
+        driver = open_driver(state.target_spec, self.action_table(), state.target_options)
+        return ObservationSession(self.workspace, driver, self.mapper())
+
+    def _execute_raw(self, probes: list) -> list[dict[str, Any]]:
+        from teardown.engine.probing import run_probes
+
+        return [r.observation for r in run_probes(self._worker_session, probes, workers=4)]
+
+    def discover_cli(self, cmd: str, takes_files: bool = True) -> dict[str, Any]:
+        """Interface structure from help + behavior. Help prose stays in evidence; only structure is kept here."""
+        from teardown.drivers.cli.discover import discover
+
+        found = discover(self._execute_raw, cmd, takes_files=takes_files)
+        found.pop("_help_text", None)
+        record = DiscoveryRecord(cmd=cmd, target=self.state.target, data=found)
+        self.workspace.put(record)
+        summary = {"cmd": cmd, "options": len(found["model"]["options"]),
+                   "findings": {k: len(v) for k, v in found["findings"].items()}}
+        self.audit.append("cli-discovery", {"discovery": record.id}, summary)
+        return {"discovery": record.id, **found}
+
+    def probe_cli(self, feature: str, hints: dict[str, Any], *, discovery: dict[str, Any] | None = None,
+                  workers: int = 4, pairwise: bool = True, env_sample: int = 200) -> dict[str, Any]:
+        from teardown.drivers.cli.plan import ProbeHints, accepted_classes, plan_pairwise, plan_sweep
+        from teardown.engine.mapper import describe_symbol
+        from teardown.engine.mining import mine
+        from teardown.engine.noise import calibrate
+        from teardown.engine.probing import run_probes
+
+        h = ProbeHints.model_validate(hints)
+        workers = self.max_workers(workers)
+        found = discovery or self.discover_cli(h.cmd, takes_files=h.takes_files)
+        model = found["model"]
+        sweep = plan_sweep(model, h)
+        results = run_probes(self._worker_session, sweep, workers=workers)
+        accepted = accepted_classes(sweep, [describe_symbol(r.symbol) for r in results], h.default_input)
+        probes = list(sweep)
+        if pairwise:
+            extra = [p for p in plan_pairwise(model, h, accepted) if p.id not in {q.id for q in probes}]
+            results += run_probes(self._worker_session, extra, workers=workers)
+            probes += extra
+        noise = calibrate(self._worker_session, probes, results, env_sample=env_sample, workers=workers)
+        nondet = set(noise.nondeterministic)
+        table = ProbeTable(
+            feature=feature,
+            target=self.state.target,
+            mapper=self.state.mapper,
+            actions={r.probe.id: r.probe.invocation.model_dump(mode="json") for r in results},
+            rows=[ProbeRow(action=r.probe.id, expect=r.symbol, tags=r.probe.tags) for r in results
+                  if r.probe.id not in nondet],
+            excluded={pid: "nondeterministic" for pid in sorted(nondet)},
+            discovery={k: v for k, v in found.items() if k in ("cmd", "model", "minimal", "findings")},
+        )
+        mined, mixed = mine(feature, h.cmd, results, exclude=nondet)
+        table = table.model_copy(update={"mixed": mixed, "id": ""})
+        table = ProbeTable.model_validate(table.model_dump(exclude={"id"}))
+        self.workspace.put(table)
+        state = self.state
+        self._save(state.model_copy(update={"probes": {**state.probes, feature: table.id}}))
+        self._reset_session()
+        evidence = {r.probe.id: r.evidence for r in results}
+        for m in mined:
+            first, *rest = m.checks
+            claim = self.propose_claim(feature=feature, kind=m.kind, statement=m.statement, inputs=first.inputs,
+                                       expect=first.expect, match="subset", cases=rest)
+            self.ledger.record_batch(claim.id, 2 * len(m.checks), [evidence[c.inputs[0]] for c in m.checks])
+        for var, ids in noise.env_dependent.items():
+            self.ledger.record_unknown(feature, f"{len(ids)} sampled probe(s) behave differently when {var} changes",
+                                       [f"specify the {var}-dependent behavior", "probe it across more values"])
+        for row in mixed:
+            self.ledger.record_unknown(feature, f"value class '{row['class']}' of {row['factor']} has mixed outcomes",
+                                       ["partition this class further", "check for interaction with other inputs"])
+        if nondet:
+            self.ledger.record_unknown(feature, f"{len(nondet)} probe(s) are nondeterministic and were excluded",
+                                       ["mask the varying part of the output", "state a partial-order claim"])
+        self.audit.append("probe-table", {"table": table.id}, {
+            "feature": feature, "probes": len(results), "rows": len(table.rows), "nondeterministic": len(nondet),
+            "env_dependent": {k: len(v) for k, v in noise.env_dependent.items()}, "claims": len(mined),
+            "mixed": len(mixed)})
+        return {"table": table.id, "probes": len(results), "rows": len(table.rows), "claims": len(mined),
+                "mixed": len(mixed), "noise": noise.model_dump(mode="json"), "accepted": accepted}
+
+    def ingest_docs(self, source: str, text: str) -> int:
+        """Register public documentation the observer read. It stays dirty-side; its paragraphs join the gate corpus
+        so verbatim reuse in rules or claims is flagged. Rules derived from it should use origin='documented'."""
+        n = self.workspace.add_reference_text(source, text)
+        self.audit.append("docs-ingested", {}, {"source": source, "paragraphs": n})
+        return n
+
+    def api_contract(self) -> dict[str, Any]:
+        """OpenAPI-style skeleton of the backend contract observed through the UI: paths, methods, statuses and
+        value-free body shapes. No values, so no data or prose from the target: query values become ``{}``, and
+        path segments that are data (slugs, user names) are folded by the observer's ``target_options
+        ["api_templates"]`` (e.g. ``["/api/articles/feed", "/api/articles/{slug}"]``; first match wins)."""
+        from teardown.core.model import Evidence
+
+        templates = list(self.state.target_options.get("api_templates", []))
+        paths: dict[str, dict[str, Any]] = {}
+        for ev in self.workspace.iter_objects("ev", Evidence):
+            if ev.driver != "web" or not isinstance(ev.payload, dict):
+                continue
+            for ex in ev.payload.get("api_shapes", []) + [
+                    {"method": m, "path": p, "status": st} for m, p, st in ev.payload.get("network", [])]:
+                op = paths.setdefault(_contract_path(ex["path"], templates), {}).setdefault(
+                    ex["method"].lower(), {"responses": {}})
+                if ex.get("request_shape") is not None:
+                    op["requestBody"] = ex["request_shape"]
+                if ex.get("status") is not None:
+                    resp = op["responses"].setdefault(str(ex["status"]), {})
+                    if ex.get("response_shape") is not None:
+                        resp["shape"] = ex["response_shape"]
+        return {"openapi": "3.1.0-skeleton", "paths": dict(sorted(paths.items()))}
+
+    # -- coverage ------------------------------------------------------------------------------------------------
+    def coverage(self, feature: str, inventory: dict[str, list[str]] | None = None, *,
+                 record_unknowns: bool = True) -> dict[str, Any]:
+        """Feature inventory -> number of probes and rule checks exercising each item.
+
+        An item is exercised when any of its patterns occurs in an action's argv or stdin. The inventory defaults to
+        the discovered options; the observer adds documented items (functions, formats, modes, edge cases).
+        Uncovered items become explicit unknowns: missing coverage is unknown, not absence.
+        """
+        from teardown.engine.rules import RuleTable
+
+        state = self.state
+        # the observer's items accumulate: a later call without them must not drop them (they would vanish as if
+        # covered)
+        kept = {**state.coverage_inventory.get(feature, {}), **(inventory or {})}
+        if inventory:
+            state = state.model_copy(update={"coverage_inventory": {**state.coverage_inventory, feature: kept}})
+            self._save(state)
+        items = dict(kept)
+        table = self.workspace.get(state.probes[feature], ProbeTable) if feature in state.probes else None
+        if table and table.discovery.get("model"):
+            for o in table.discovery["model"]["options"].values():
+                if not o.get("phantom") and o["names"][0] not in ("--help", "--version", "-h"):
+                    items.setdefault(f"option {'/'.join(o['names'])}", list(o["names"]))
+        actions = list(table.actions.items()) if table else []
+        if feature in state.rules:
+            rule_table = self.workspace.get(state.rules[feature], RuleTable)
+            actions += list(rule_table.actions.items())
+            named = self.action_table()
+            for rule in rule_table.rules:  # UI rules: the named actions their sequences use
+                for c in rule.checks:
+                    for name in (c.a_inputs or []) + (c.b_inputs or []):
+                        if name in named:
+                            actions.append((name, named[name]))
+        if not state.target_spec.startswith("cli:"):  # UI: actions count only when a probe or rule runs them
+            named = self.action_table()
+            used = {n for seq in self._used_sequences(feature, table) for n in seq}
+            actions += [(n, named[n]) for n in sorted(used) if n in named]
+
+        def exercises(entry: tuple[str, dict[str, Any]], pattern: str) -> bool:
+            name, action = entry
+            if "argv" not in action:  # UI action: match its name or definition (role, accessible name, value)
+                return pattern in name or pattern in json.dumps(action, ensure_ascii=False)
+            argv = action.get("argv", [])[1:]
+            if pattern.startswith("-"):  # an option: a token, --opt=value, or a short option attached/bundled
+                return any(t == pattern or t.startswith(pattern + "=") or (
+                    len(pattern) == 2 and t.startswith("-") and not t.startswith("--") and pattern[1] in t[1:])
+                    for t in argv)
+            return pattern in " ".join(argv) or pattern in (action.get("stdin") or "")
+
+        counts = {item: sum(any(exercises(a, pat) for pat in patterns) for a in actions)
+                  for item, patterns in items.items()}
+        if state.target_spec.startswith("web:"):
+            counts.update(self._fault_coverage(feature, table))
+            counts.update(self._data_state_coverage(feature, table))
+            counts.update(self._route_coverage(feature, table)["counts"])
+        if not state.target_spec.startswith("cli:"):
+            counts.update(self._ui_coverage(feature, table))
+        items.update({k: [] for k in counts if k not in items})
+        uncovered = sorted(i for i, n in counts.items() if n == 0)
+        self._save(self.state.model_copy(update={"coverage": {**self.state.coverage, feature: {
+            "items": len(items), "uncovered": uncovered}}}))
+        if record_unknowns:
+            for item in uncovered:
+                self.ledger.record_unknown(feature, f"not exercised by any probe or rule: {item}",
+                                           ["add probes or a rule for this item"])
+            prefix = "not exercised by any probe or rule: "
+            now_covered = set(counts) - set(uncovered)
+            for u in self.ledger.unknowns().values():  # gaps this run shows covered are answered
+                q = u.identity.question
+                if (u.identity.feature == feature and u.status == "open" and q.startswith(prefix)
+                        and q[len(prefix):] in now_covered):
+                    self.update_unknown(u.id, "resolved", "covered by a probe or rule")
+        self.audit.append("coverage", {}, {"feature": feature, "items": len(items), "uncovered": len(uncovered)})
+        return {"items": len(items), "covered": len(items) - len(uncovered), "uncovered": uncovered,
+                "counts": counts}
+
+    # -- UI discovery and suggestions -----------------------------------------------------------------------------
+    def discover_ui(self, feature: str, *, start: list[str] | None = None, max_states: int = 25, max_depth: int = 4,
+                    max_episodes: int = 200, fill: bool = True, max_seconds: float | None = 240) -> dict[str, Any]:
+        """Crawl the UI from the start screen (or after the named ``start`` actions): click every enabled control,
+        identify screens by route, headings and controls. Defines a ``click[role:name]`` action for every control
+        found and stores the inventory, which ``coverage`` and ``suggest_probes`` then use."""
+        from teardown.engine import discovery as D
+
+        state = self.state
+        platform = state.target_spec.split(":", 1)[0]
+        if platform not in ("web", "android", "desktop"):
+            raise ValueError("discover_ui is for UI targets (web, android, desktop)")
+        table = self.action_table()
+        missing = [a for a in start or [] if a not in table]
+        if missing:
+            raise KeyError(f"unknown start actions: {missing}")
+        result = D.crawl(self._worker_session, platform, start=[(a, table[a]) for a in start or []],
+                         max_states=max_states, max_depth=max_depth, max_episodes=max_episodes, fill=fill,
+                         describe=describe_symbol, max_seconds=max_seconds)
+        self.define_actions(result["actions"])
+        # runs accumulate (one per role or start point): a later crawl adds screens, it does not replace earlier ones
+        previous = self._discovery(feature) or {"screens": {}, "transitions": [], "episodes": 0, "actions": {}}
+        seen = {json.dumps(t, sort_keys=True) for t in previous["transitions"]}
+        merged = {"screens": {**previous["screens"], **result["screens"]},
+                  "transitions": [*previous["transitions"],
+                                  *(t for t in result["transitions"] if json.dumps(t, sort_keys=True) not in seen)],
+                  "episodes": previous["episodes"] + result["episodes"], "truncated": result["truncated"],
+                  "actions": {**previous.get("actions", {}), **result["actions"]}}
+        path = self.root / "discovery" / f"{feature}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(D.as_json(merged), encoding="utf-8")
+        self.audit.append("ui-discovery", {}, {"feature": feature, "screens": len(result["screens"]),
+                                               "screens_total": len(merged["screens"]),
+                                               "episodes": result["episodes"], "truncated": result["truncated"]})
+        return {"screens": [{"id": k, **v} for k, v in result["screens"].items()],
+                "screens_total": len(merged["screens"]),
+                "transitions": len(result["transitions"]), "episodes": result["episodes"],
+                "truncated": result["truncated"], "actions_defined": sorted(result["actions"])}
+
+    def _discovery(self, feature: str) -> dict[str, Any] | None:
+        path = self.root / "discovery" / f"{feature}.json"
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+    def _used_sequences(self, feature: str, table: Any) -> list[list[str]]:
+        """Action sequences the feature's probe rows and rule checks actually run."""
+        from teardown.engine.rules import RuleTable
+
+        used: list[list[str]] = [[*r.prefix, r.action] for r in (table.rows if table else [])]
+        if feature in self.state.rules:
+            for rule in self.workspace.get(self.state.rules[feature], RuleTable).rules:
+                used += [c.a_inputs or [] for c in rule.checks] + [c.b_inputs or [] for c in rule.checks]
+        return used
+
+    def _ui_coverage(self, feature: str, table: Any) -> dict[str, int]:
+        """Discovered controls and fields -> how many probe/rule sequences click or fill them."""
+        from teardown.engine.discovery import split_control
+
+        found = self._discovery(feature)
+        if not found:
+            return {}
+        named = self.action_table()
+        touched: list[tuple[str, str, str]] = []  # (verb, role, name)
+        for seq in self._used_sequences(feature, table):
+            for n in seq:
+                spec = named.get(n) or {}
+                verb = spec.get("op") or spec.get("action")
+                if verb in ("click", "fill", "check", "uncheck", "select", "press", "longclick"):
+                    touched.append(("fill" if verb in ("fill", "select") else "click", spec.get("role"),
+                                    spec.get("name")))
+        # a click whose every recorded outcome is NA (off-screen, hidden) did not exercise the control
+        outcomes: dict[tuple[str | None, str | None], set[bool]] = {}
+        for seq, value in self._observed_sequences(feature, table, raw=True):
+            spec = named.get(seq[-1]) or {}
+            if (spec.get("op") or spec.get("action")) == "click":
+                outcomes.setdefault((spec.get("role"), spec.get("name")), set()).add(value == "NA")
+        counts: dict[str, int] = {}
+        for screen in found["screens"].values():
+            for control in sorted({*screen["clickable"], *screen.get("clickable_when_filled", [])}):
+                role, name = split_control(control)
+                if outcomes.get((role, name)) == {True}:
+                    counts[f"control {control}"] = 0
+                    continue
+                counts[f"control {control}"] = sum(1 for v, r, nm in touched if v == "click" and nm == name and
+                                                   r in (role, None))
+            for field in screen["fields"]:
+                role, name = split_control(field)
+                counts[f"field {field}"] = sum(1 for v, r, nm in touched if v == "fill" and nm == name)
+            for field in screen.get("live_fields", []):  # read right after typing, with at least three values
+                values = {named[seq[-1]].get("value") for seq in self._used_sequences(feature, table)
+                          if seq and (named.get(seq[-1]) or {}).get("op") == "fill"
+                          and named[seq[-1]].get("name") == split_control(field)[1]}
+                counts[f"live output {field}"] = len(values) if len(values) >= 3 else 0
+        return counts
+
+    def suggest_probes(self, feature: str, limit: int = 30) -> list[dict[str, Any]]:
+        """Concrete next steps for the feature's coverage gaps: ready-made fault actions with a path that makes
+        the call, field-probe arguments for unprobed fields, click paths for unexercised controls."""
+        from teardown.engine.discovery import fill_action, guess_kind, split_control
+
+        report = self.coverage(feature, record_unknowns=False)
+        found = self._discovery(feature) or {"screens": {}, "transitions": []}
+        screens = found["screens"]
+        named = self.action_table()
+        out: list[dict[str, Any]] = []
+
+        cache: dict[str, Any] = {}
+
+        def routes_info() -> dict[str, Any]:
+            if "routes" not in cache:
+                table = self.workspace.get(self.state.probes[feature], ProbeTable) \
+                    if feature in self.state.probes else None
+                cache["routes"] = self._route_coverage(feature, table)
+            return cache["routes"]
+
+        def screen_with(kind: str, key: str) -> dict[str, Any] | None:
+            return next((sc for sc in screens.values() if key in sc[kind]), None)
+
+        for item in report["uncovered"]:
+            if item.startswith("fault "):
+                _, method, path, cls = item.split(" ", 3)
+                glob = re.sub(r"\{[^}]+\}", "*", path)
+                mode = {"5xx": {"mode": "status", "status": 500}, "network": {"mode": "abort"},
+                        "malformed": {"mode": "malformed"}}[cls]
+                fault = {"op": "fault", "fault": {"path": glob, "method": method, **mode}}
+                trigger = next((t for t in found["transitions"]
+                                if any(e.split(" ")[:2] == [method, e.split(" ")[1]] and
+                                       path_glob_match(glob, e.split(" ")[1].split("?")[0])
+                                       for e in t["network"])), None)
+                reach = screens.get(trigger["from"], {}).get("via", []) + [trigger["action"]] if trigger else None
+                observed = next((e for e in (trigger or {}).get("network", [])
+                                 if e.split(" ")[0] == method and path_glob_match(glob, e.split(" ")[1].split("?")[0])),
+                                None)
+                out.append({"item": item, "kind": "fault", "action": fault,
+                            **({"observed_as": observed} if observed else {}),
+                            "reach": reach or "no discovered path makes this call; it may happen at start-up "
+                                              "(put the fault first and reset) or after a form submission",
+                            "suggest": "define the fault action and state a rule on what the UI shows with "
+                                       "[fault, ...reach]"})
+            elif item.startswith("field "):
+                control = item.split(" ", 1)[1]
+                role, name = split_control(control)
+                screen = screen_with("fields", control)
+                submit = next((c for c in (screen or {}).get("clickable", []) + (screen or {}).get("disabled", [])
+                               if split_control(c)[0] in ("button", "push button")), None)
+                kind = ("email" if "mail" in name.lower() else "password" if "password" in name.lower() else
+                        "number" if any(w in name.lower() for w in ("amount", "count", "number", "age", "price",
+                                                                     "percent", "quantity", "size")) else "text")
+                out.append({"item": item, "kind": "field",
+                            "call": {"tool": "probe_web_field", "role": role, "name": name, "kind": kind,
+                                     "prefix": (screen or {}).get("via", []),
+                                     "submit": f"click[{submit}]" if submit else None},
+                            "suggest": "check prefix/submit (submit may need other fields filled first via prefix)"})
+            elif item.startswith("live output "):
+                control = item[len("live output "):]
+                role, name = split_control(control)
+                screen = next((sc for sc in screens.values() if control in sc.get("live_fields", [])), None) or {}
+                others = [fill_action("web", *split_control(f), screen.get("options", {}).get(f))
+                          for f in screen.get("fields", []) if f != control]
+                out.append({"item": item, "kind": "live-output",
+                            "call": {"tool": "probe_web_field", "role": role, "name": name, "submit": None,
+                                     "kind": guess_kind(name), "prefix": [*screen.get("via", []),
+                                                                         *(n for n, _ in others)]},
+                            "suggest": "typing here changes the screen without a click (a preview, total or "
+                                       "counter): probe it without submit so empty, out-of-range and malformed "
+                                       "values are recorded, then state the rule"})
+            elif item.startswith(("data state: table ", "data state: list ")):
+                kind_of = "table" if item.startswith("data state: table ") else "list"
+                name, state = item[len(f"data state: {kind_of} "):].rsplit(": ", 1)
+                how = {"none": "filter, search or change the data so that nothing is listed (or use an account "
+                               "with no records)",
+                       "one": "filter, search or change the data so that exactly one entry remains (watch singular "
+                              "wording)",
+                       "several": "show it with two or more entries"}[state]
+                key = "`tables`" if kind_of == "table" else "`outline` / `text`"
+                out.append({"item": item, "kind": "data-state", kind_of: name, "state": state,
+                            "suggest": f"{how}, then state a rule with an outcome check on {key} (and the count or "
+                                       "empty-state text)"})
+            elif item.startswith("route ") and item.endswith((": signed in", ": signed out")):
+                route, label = item[len("route "):].rsplit(": ", 1)
+                info = routes_info()
+                path = info["examples"].get(route)
+                go = {f"goto[{path}]": {"op": "goto", "value": path}} if path else {}
+                sequence = [*(info["signin"] if label == "signed in" else []), *go]
+                out.append({"item": item, "kind": "route-session", "define": go, "sequence": sequence,
+                            "suggest": f"open {path or route} {label} (define the goto action, then run the "
+                                       "sequence) and state what the page shows: its content, or where it sends "
+                                       "the user" + ("" if path else "; no visit recorded yet, so pick a "
+                                                     "concrete path for this route")})
+            elif item.endswith(": one record per status"):
+                route = item[len("route "):-len(": one record per status")]
+                info = routes_info()
+                tbl, values = info["status_routes"].get(route, ("", []))
+                out.append({"item": item, "kind": "route-status", "statuses": values, "table": tbl,
+                            "visited": info["records"].get(route, []),
+                            "suggest": f"open {route} for a record in each status ({', '.join(values)}; see "
+                                       f"table {tbl!r}) and state what each shows: a locked record's page is "
+                                       "often its own screen"})
+            elif item.startswith("session expiry"):
+                out.append({"item": item, "kind": "session",
+                            "action": {"op": "fault", "fault": {"path": "/**", "mode": "status", "status": 401}},
+                            "suggest": "sign in, add this fault, then navigate or submit: state what the UI shows "
+                                       "and where it sends the user (narrow the path to the app's API)"})
+            elif item.startswith("control "):
+                control = item.split(" ", 1)[1]
+                screen = screen_with("clickable", control)
+                act = f"click[{control}]"
+                out.append({"item": item, "kind": "control", "sequence": [*(screen or {}).get("via", []), act],
+                            "defined": act in named,
+                            "suggest": "state a rule on what this control does (outcome, or same/differs)"})
+            else:
+                out.append({"item": item, "kind": "other", "suggest": "add a probe or rule that exercises it"})
+            if len(out) >= limit:
+                break
+        return out
+
+    def _recorded_symbols(self, feature: str, table: Any) -> list[dict[str, Any]]:
+        """Symbols the spec records: rule-check observations and probe-row expectations."""
+        from teardown.engine.rules import RuleTable
+
+        raw: list[str] = [r.expect for r in (table.rows if table else []) if isinstance(r.expect, str)]
+        if feature in self.state.rules:
+            for rule in self.workspace.get(self.state.rules[feature], RuleTable).rules:
+                raw += [s for c in rule.checks for s in (c.observed_a, c.observed_b) if s]
+        out = []
+        for s in raw:
+            value = describe_symbol(s)
+            if isinstance(value, dict):
+                out.append(value)
+        return out
+
+    def _data_state_coverage(self, feature: str, table: Any) -> dict[str, int]:
+        """Web: every table the spec shows, in the data states lists have: no rows (the table empty, or absent from
+        its route), exactly one row (singular wording), several rows. Plus, for apps with a sign-in, a session
+        that expires (a signed-in request answered 401). Counted from what rules and probes recorded."""
+        from teardown.engine.discovery import route_template
+
+        symbols = self._recorded_symbols(feature, table)
+        seen: dict[str, set[str]] = {}
+        routes: dict[str, set[str]] = {}
+        for sym in symbols:
+            for name, data in (sym.get("tables") or {}).items():
+                n = len(data.get("rows", []))
+                seen.setdefault(name, set()).add("none" if n == 0 else "one" if n == 1 else "several")
+                routes.setdefault(name, set()).add(route_template(sym.get("path") or ""))
+        for name, rts in routes.items():  # an empty list often replaces the table with an empty-state message
+            if any(route_template(sym.get("path") or "") in rts and name not in (sym.get("tables") or {})
+                   for sym in symbols):
+                seen[name].add("none")
+        counts = {f"data state: table {name}: {state}": int(state in states)
+                  for name, states in seen.items() for state in ("none", "one", "several")}
+        # named lists (web.aria/v8 outline): the same three states
+        lists: dict[str, set[str]] = {}
+        list_routes: dict[str, set[str]] = {}
+        for sym in symbols:
+            for name, n in _named_lists(sym.get("outline") or []).items():
+                lists.setdefault(name, set()).add("none" if n == 0 else "one" if n == 1 else "several")
+                list_routes.setdefault(name, set()).add(route_template(sym.get("path") or ""))
+        for name, rts in list_routes.items():
+            if any(route_template(sym.get("path") or "") in rts and sym.get("outline")
+                   and name not in _named_lists(sym["outline"]) for sym in symbols):
+                lists[name].add("none")
+        counts.update({f"data state: list {name}: {state}": int(state in states)
+                       for name, states in lists.items() for state in ("none", "one", "several")})
+        named = self.action_table()
+        signs_in = any((a.get("op") == "fill" or a.get("action") == "fill")
+                       and "password" in (a.get("name") or "").lower() for a in named.values())
+        if signs_in:
+            used = {n for seq in self._used_sequences(feature, table) for n in seq}
+            counts["session expiry: a signed-in request answered 401"] = sum(
+                1 for n in used if named.get(n, {}).get("op") == "fault"
+                and str((named[n].get("fault") or {}).get("status")) == "401")
+        return counts
+
+    def _route_coverage(self, feature: str, table: Any) -> dict[str, Any]:
+        """Web: routes in combination with what changes them.
+
+        - Route x session (apps with a sign-in): every route visited signed out and signed in, the sign-in page
+          included. A route's guard or redirect only shows in the other session state.
+        - Route x record status: when a table has a status column (Status, State, Stage), every record route of
+          the same kind (``/recitals/*``, ``/recitals/*/edit``) visited for at least as many records as there are
+          statuses. A locked record's page is often its own screen.
+
+        A visit is the last ``goto`` of a recorded sequence (the route asked for) and the route it ended on."""
+        named = self.action_table()
+        found = self._discovery(feature) or {"screens": {}}
+        visits: list[tuple[str, str | None, bool, str]] = []  # (route, record id, signed in, concrete path)
+        examples_seed: dict[str, str] = {}
+        signin: list[str] = []
+        observed = self._observed_sequences(feature, table)
+
+        def offers_sign_out(symbol: dict[str, Any]) -> bool:
+            return any(_SIGN_OUT.search(k.split(":", 1)[-1]) for k in symbol.get("controls") or {})
+
+        # signed in = the page offers to sign out (a failed sign-in or an expired session does not); apps without
+        # a sign-out control fall back to the sequence: a password fill followed by a click
+        by_page = any(offers_sign_out(v) for _, v in observed)
+        for seq, value in observed:
+            signed, prefix = _signed_in_prefix(seq, named)
+            if by_page:
+                signed = offers_sign_out(value)
+            clean = prefix and not any((named.get(n) or {}).get("op") == "fault" for n in prefix)
+            if clean and signed and (not signin or len(prefix) < len(signin)):  # the shortest fault-free sign-in
+                signin = prefix
+            paths = [value.get("path") or ""]
+            last = named.get(seq[-1]) or {}
+            if last.get("op") == "goto" and last.get("value"):
+                paths.append(last["value"])
+            for path in {p for p in paths if p}:
+                route, record = _record_route(path)
+                visits.append((route, record, signed, path.split("?", 1)[0]))
+        routes = {_record_route(sc.get("path") or "")[0] for sc in found["screens"].values() if sc.get("path")}
+        routes |= {v[0] for v in visits}  # plus the start page and every page a goto action names
+        start = urlparse(self.state.target_spec.split(":", 1)[1]).path
+        routes |= {_record_route(p)[0] for p in [start, *(a.get("value") for a in named.values()
+                                                          if a.get("op") == "goto")] if p}
+        for path in [start, *(a.get("value") for a in named.values() if a.get("op") == "goto")]:
+            if path:
+                examples_seed.setdefault(_record_route(path)[0], path.split("?", 1)[0])
+        signs_in = any((a.get("op") == "fill" or a.get("action") == "fill")
+                       and "password" in (a.get("name") or "").lower() for a in named.values())
+        counts: dict[str, int] = {}
+        if signs_in:
+            for route in sorted(routes):
+                for signed, label in ((False, "signed out"), (True, "signed in")):
+                    counts[f"route {route}: {label}"] = sum(1 for v in visits if v[0] == route and v[2] == signed)
+        statuses: dict[str, set[str]] = {}  # table name -> status values
+        kinds: dict[str, str] = {}  # table name -> its name and headers, lowercased, for matching routes
+        for sym in self._recorded_symbols(feature, table):
+            for name, data in (sym.get("tables") or {}).items():
+                cols = data.get("columns") or []
+                for i, col in enumerate(cols):
+                    if _STATUS_HEADER.search(col or ""):
+                        statuses.setdefault(name, set()).update(
+                            row[i] for row in data.get("rows", []) if i < len(row) and row[i])
+                        kinds[name] = " ".join([name, *cols]).lower()
+        status_routes: dict[str, tuple[str, list[str]]] = {}
+        for route in sorted(r for r in routes if "*" in r):
+            stem = route.strip("/").split("/")[0].lower().rstrip("s")
+            for name, values in statuses.items():
+                if stem and stem in kinds[name] and len(values) > 1:
+                    status_routes[route] = (name, sorted(values)[:8])
+                    break
+        for route, (_, values) in status_routes.items():
+            records = {v[1] for v in visits if v[0] == route and v[1]}
+            counts[f"route {route}: one record per status"] = len(records) if len(records) >= len(values) else 0
+        examples = dict(examples_seed)
+        for v in visits:
+            examples[v[0]] = examples.get(v[0]) or v[3]
+        return {"counts": counts, "signin": signin, "examples": examples, "status_routes": status_routes,
+                "records": {r: sorted({v[1] for v in visits if v[0] == r and v[1]}) for r in status_routes}}
+
+    FAULT_CLASSES = {"5xx": "a server error", "network": "a network failure or timeout",
+                     "malformed": "a malformed body"}
+
+    def _observed_sequences(self, feature: str, table: Any, *, raw: bool = False) -> list[tuple[list[str], Any]]:
+        """(action sequence, the symbol recorded after its last step) for probe rows and rule checks. ``raw`` keeps
+        non-dict outcomes ("NA", "DISABLED")."""
+        from teardown.engine.rules import RuleTable
+
+        pairs: list[tuple[list[str], str | None]] = [([*r.prefix, r.action], r.expect)
+                                                     for r in (table.rows if table else [])]
+        if feature in self.state.rules:
+            for rule in self.workspace.get(self.state.rules[feature], RuleTable).rules:
+                for c in rule.checks:
+                    pairs += [(c.a_inputs or [], c.observed_a), (c.b_inputs or [], c.observed_b)]
+        out = []
+        for seq, symbol in pairs:
+            value = describe_symbol(symbol) if isinstance(symbol, str) else None
+            if seq and (isinstance(value, dict) or (raw and value is not None)):
+                out.append((seq, value))
+        return out
+
+    def _fault_coverage(self, feature: str, table: Any) -> dict[str, int]:
+        """Web: every observed API endpoint x fault class (5xx, network, malformed) -> how many recorded probe or
+        rule observations show that call made while a matching fault was active (method and path from the
+        recorded network exchanges, so a fault on GET does not credit POST on the same path)."""
+        from teardown.drivers.web.driver import path_glob
+
+        named = self.action_table()
+        templates = list(self.state.target_options.get("api_templates", []))
+        credits: dict[tuple[str, str, str], int] = {}
+        for seq, symbol in self._observed_sequences(feature, table):
+            faults = [named[n]["fault"] for n in seq if named.get(n, {}).get("op") == "fault"
+                      and (named[n].get("fault") or {}).get("mode") not in ("release", "clear")]
+            if not faults:
+                continue
+            for entry in symbol.get("network") or []:
+                method, _, rest = entry.partition(" ")
+                path = rest.rsplit(" ", 1)[0].split("?", 1)[0]
+                for f in faults:
+                    cls = fault_class(f)
+                    if cls and path_glob(f.get("path", "**"))(path) and (
+                            not f.get("method") or f["method"].upper() == method.upper()):
+                        key = (method.upper(), _contract_path(path, templates), cls)
+                        credits[key] = credits.get(key, 0) + 1
+
+        counts: dict[str, int] = {}
+        for path, methods in self.api_contract()["paths"].items():
+            bare = path.split("?", 1)[0]
+            for method in methods:
+                for cls in self.FAULT_CLASSES:
+                    counts[f"fault {method.upper()} {bare} {cls}"] = credits.get((method.upper(), bare, cls), 0)
+        return counts
+
+    # -- rules ---------------------------------------------------------------------------------------------------
+    def check_rules(self, feature: str, rules: list[dict[str, Any]], workers: int = 4,
+                    max_seconds: float | None = None) -> dict[str, Any]:
+        """Run observer-authored rules against the original and record them for the spec.
+
+        ``max_seconds``: rules run one at a time; once the budget is spent no new rule starts, and the rest
+        come back under ``not_checked`` (nothing half-recorded) for the next call. All rules are validated first.
+        """
+        if not max_seconds or len(rules) <= 1:
+            return self._check_rules_batch(feature, rules, workers)
+        import time
+
+        self._check_rules_batch(feature, rules, workers, validate_only=True)
+        deadline, out, done = time.monotonic() + max_seconds, None, 0
+        while done < len(rules) and (out is None or time.monotonic() < deadline):
+            batch = rules[done:done + 1]  # a rule with long episodes can take a minute on a real app
+            result = self._check_rules_batch(feature, batch, workers)
+            out = result if out is None else {**result, "rules": [*out["rules"], *result["rules"]]}
+            done += len(batch)
+        if done < len(rules):
+            out["not_checked"] = [r.get("statement", "") for r in rules[done:]]
+            out["note"] = (f"time budget ({max_seconds:.0f}s) spent after {done} of {len(rules)} rules; "
+                           "send the rules under not_checked again")
+        return out
+
+    def _check_rules_batch(self, feature: str, rules: list[dict[str, Any]], workers: int = 4, *,
+                           validate_only: bool = False) -> dict[str, Any]:
+        from teardown.drivers.cli.invocation import Invocation
+        from teardown.drivers.cli.plan import Probe
+        from teardown.engine import rules as R
+        from teardown.engine.probing import run_probes
+
+        specs = [R.RuleSpec.model_validate({"feature": feature, **r}) for r in rules]
+        known_actions = self.action_table()
+        # discovery's naming is self-describing: click[role:name] for a record discovery folded into its table's
+        # representative row is defined on first use rather than rejected
+        platform = self.state.target_spec.split(":", 1)[0]
+        if platform in ("web", "android", "desktop"):
+            implied = {}
+            for spec in specs:
+                for check in spec.checks:
+                    for side in (check.a, check.b):
+                        for n in (side or {}).get("actions") or []:
+                            m = re.fullmatch(r"click\[([a-z][a-z ]*):(.+)\]", n) if isinstance(n, str) else None
+                            if m and n not in known_actions:
+                                implied[n] = ({"op": "click", "role": m[1], "name": m[2]} if platform == "web"
+                                              else {"action": "click", "role": m[1], "name": m[2]})
+            if implied:
+                self.define_actions(implied)
+                known_actions = self.action_table()
+        problems = []
+        for spec in specs:
+            for i, check in enumerate(spec.checks):
+                for side_name, side in (("a", check.a), ("b", check.b)):
+                    if side is None or "actions" not in side:
+                        continue
+                    if not side["actions"]:
+                        problems.append(f"{spec.statement[:50]!r} check {i} side {side_name}: empty action list")
+                    inline = [n for n in side["actions"] if not isinstance(n, str)]
+                    if inline:
+                        problems.append(f"{spec.statement[:50]!r} check {i} side {side_name}: actions are names; "
+                                        f"define {inline[0]!r} with define_actions and use its name")
+                        continue
+                    unknown = [n for n in side["actions"] if n not in known_actions]
+                    if unknown:  # an undefined action would just be unavailable (NA) and the check vacuous
+                        problems.append(f"{spec.statement[:50]!r} check {i} side {side_name}: undefined actions "
+                                        f"{unknown}")
+        if problems:
+            raise ValueError("rule checks must run defined actions: " + "; ".join(problems[:8]))
+        if validate_only:
+            return {}
+        workers = self.max_workers(workers)
+        invocations: dict[str, dict[str, Any]] = {}
+        sequences: dict[str, list[str]] = {}
+        for spec in specs:
+            for check in spec.checks:
+                for side in (check.a, check.b):
+                    if side is None:
+                        continue
+                    if "actions" in side:  # UI rule: a sequence of named actions
+                        sequences[R.action_id(side)] = list(side["actions"])
+                    else:
+                        invocations[R.action_id(side)] = Invocation.model_validate(side).model_dump(mode="json")
+        if sequences:
+            from teardown.engine.fieldprobe import SequenceProbe, run_sequences
+
+            seq_probes = [SequenceProbe(id=k, inputs=v) for k, v in sequences.items()]
+            first = {r.probe.id: r.symbol for r in run_sequences(self._worker_session, seq_probes, workers=workers)}
+            second = {r.probe.id: r.symbol for r in run_sequences(self._worker_session, seq_probes, workers=workers)}
+        else:
+            first, second = {}, {}
+        probes = [Probe(id=k, invocation=Invocation.model_validate(v), tags=["s:rule"]) for k, v in invocations.items()]
+        if probes:
+            first |= {r.probe.id: r.symbol for r in run_probes(self._worker_session, probes, workers=workers)}
+            second |= {r.probe.id: r.symbol for r in run_probes(self._worker_session, probes, workers=workers)}
+        unstable = {k for k in first if first[k] != second[k]}
+        from teardown.engine.abstractions import KNOWN_KEYS
+
+        version = self.workspace.get(self.state.mapper, MapperVersion)
+        known = KNOWN_KEYS.get(version.builtin or "") if not version.rules else None
+        bad = R.unknown_keys(specs, first, known)
+        if bad:
+            valid = sorted(known or set().union(*[set(d) for d in (R.describe_symbol(s) for s in first.values())
+                                                  if isinstance(d, dict)] or [set()]))
+            raise ValueError(f"checks name keys that no symbol has, so they would compare nothing: {bad[:5]}. "
+                             f"Top-level keys are {valid}; nested values (e.g. one control) are compared through "
+                             f"their top-level key with an outcome check's subset expectation.")
+        records = []
+        for spec in specs:
+            results = [R.evaluate(c, first) for c in spec.checks]
+            noisy = any(r.a in unstable or (r.b in unstable) for r in results)
+            status = "contested" if noisy else R.status_of(results)
+            rid = content_id("rle", {"feature": feature, "statement": spec.statement,
+                                     "checks": [c.model_dump(mode="json") for c in spec.checks]})
+            records.append(R.RuleRecord(id=rid, statement=spec.statement, origin=spec.origin, kind=spec.kind,
+                                        status=status, checks=results))
+        state = self.state
+        old = self.workspace.get(state.rules[feature], R.RuleTable) if feature in state.rules else None
+        merged = {r.id: r for r in (old.rules if old else [])}
+        merged.update({r.id: r for r in records})
+        table = R.RuleTable(feature=feature, target=state.target, mapper=state.mapper,
+                            actions={**(old.actions if old else {}), **invocations}, rules=list(merged.values()))
+        self.workspace.put(table)
+        self._save(state.model_copy(update={"rules": {**state.rules, feature: table.id}}))
+        self.workspace.add_supplied([str(x) for v in invocations.values() for x in _flatten(v)])
+        self._reset_session()
+        conflicts = [r for r in records if r.origin == "documented" and r.status != "corroborated"]
+        for r in conflicts:
+            self.ledger.record_unknown(feature, f"documentation/behavior conflict: '{r.statement}' is {r.status}",
+                                       ["decide which one the reimplementation should follow"])
+        self.audit.append("rules-checked", {"table": table.id}, {
+            "feature": feature, "rules": len(records), "corroborated": sum(r.status == "corroborated" for r in records),
+            "falsified": sum(r.status == "falsified" for r in records), "conflicts": len(conflicts)})
+        def unstable_checks(r: R.RuleRecord) -> list[int]:
+            return [i for i, c in enumerate(r.checks) if c.a in unstable or (c.b in unstable)]
+
+        return {"table": table.id, "rules": [{
+            "id": r.id, "statement": r.statement, "status": r.status,
+            "failed_checks": [i for i, c in enumerate(r.checks) if not c.holds],
+            "suggestions": R.suggest(r) if r.status != "corroborated" else [],
+            **({"unstable_checks": unstable_checks(r),
+                "note": "contested: these checks' sequences gave different observations on two runs, so the rule "
+                        "cannot be confirmed; restrict keys to what the rule is about, mask clock text "
+                        "(mask_dates), or let the page settle (a press of a harmless key) before the last step"}
+               if r.status == "contested" else {})} for r in records]}
+
+    # -- web field probing -------------------------------------------------------------------------------------
+    def probe_ui_field(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Field probing for any UI target (web, android, desktop)."""
+        return self.probe_web_field(*args, **kwargs)
+
+    def probe_web_field(self, feature: str, *, prefix: list[str], role: str, name: str, submit: str | None,
+                        kind: str = "text", classes: dict[str, str] | None = None, valid: str | None = None,
+                        boundary: bool | None = None, accepted_if: dict[str, Any] | None = None,
+                        workers: int = 4) -> dict[str, Any]:
+        """Probe one form field: every class (plus the length boundary) is filled after ``prefix`` and submitted.
+        Without ``submit`` the outcome is read right after typing: live outputs (previews, totals, counters).
+
+        ``valid`` names a class known to be accepted, or is a literal value known to be accepted (added as class
+        ``valid``); it defines the acceptance reference for the boundary search.
+
+        ``accepted_if`` defines acceptance when accepted values change the outcome (a calculator's result, a slug):
+        ``{"subset": {...}}`` and/or ``{"text_contains": "..."}`` (see ``fieldprobe.acceptance``). ``boundary``
+        (the length search) defaults to on for text-like fields and off for numbers, whose limits are value ranges
+        (probe those with classes).
+        """
+        from teardown.engine import fieldprobe as fp
+        from teardown.engine.mining import mine
+
+        workers = self.max_workers(workers)
+        boundary = kind != "number" if boundary is None else boundary
+        accept = fp.acceptance(accepted_if)
+        keys = fp.OUTCOME_KEYS + tuple(k for k in (accepted_if or {}).get("subset", {}) if k not in fp.OUTCOME_KEYS)
+        values = dict(classes or fp.CLASSES.get(kind, fp.TEXT))
+        if self.state.target_spec.startswith("android:"):  # adb types ASCII only: say so instead of typing nothing
+            skipped = sorted(c for c, v in values.items() if not v.isascii())
+            values = {c: v for c, v in values.items() if v.isascii()}
+            if skipped:
+                self.ledger.record_unknown(feature, f"non-ASCII input to field '{name}' was not observed (classes "
+                                           f"{', '.join(skipped)}): Android input through adb types ASCII only",
+                                           ["observe it by hand on a device", "state the expected behavior as "
+                                            "documented"])
+        if valid is not None and valid not in values:  # a literal accepted value rather than a class name
+            values["valid"], valid = valid, "valid"
+        valid = valid or ("valid" if "valid" in values else "typical" if "typical" in values else None)
+
+        platform = self.state.target_spec.split(":", 1)[0]
+
+        def fill_action(cls: str, value: str) -> tuple[str, dict[str, Any]]:
+            if platform == "web":
+                spec = {"op": "fill", "role": role, "name": name, "value": value}
+            else:  # android / desktop action shape
+                spec = {"action": "fill", "role": role, "name": name, "value": value}
+            return f"fill[{name}]={cls}", spec
+
+        actions = dict(fill_action(c, v) for c, v in values.items())
+        self.define_actions(actions)
+        boundary_found = shortest = None
+        if boundary and valid:
+            session = self._worker_session()
+            try:
+                ref_inputs = [*prefix, fill_action(valid, values[valid])[0], *([submit] if submit else [])]
+                reference = fp.outcome(describe_symbol(session.run(ref_inputs, use_cache=False)[0][-1]),
+                                       values[valid], keys=keys)
+
+                def probe_once(value: str) -> str:
+                    act_name, spec = fill_action("probe", value)
+                    session.reset()
+                    for step in prefix:
+                        session.step(step)
+                    typed = session.step(act_name, params=spec)[1]
+                    return session.step(submit)[1] if submit else typed
+
+                shortest, boundary_found = fp.length_bounds(probe_once, kind, reference, accept=accept, keys=keys)
+            finally:
+                session.close()
+            if boundary_found is not None:
+                extra = dict([fill_action("len_at_max", fp.value_for_length(kind, boundary_found)),
+                              fill_action("len_over_max", fp.value_for_length(kind, boundary_found + 1))])
+                self.define_actions(extra)
+                actions.update(extra)
+                values["len_at_max"] = extra[f"fill[{name}]=len_at_max"]["value"]
+                values["len_over_max"] = extra[f"fill[{name}]=len_over_max"]["value"]
+            if shortest is not None:  # a minimum length too
+                extra = dict([fill_action("len_at_min", fp.value_for_length(kind, shortest)),
+                              fill_action("len_under_min", fp.value_for_length(kind, shortest - 1))])
+                self.define_actions(extra)
+                actions.update(extra)
+                values["len_at_min"] = extra[f"fill[{name}]=len_at_min"]["value"]
+                values["len_under_min"] = extra[f"fill[{name}]=len_under_min"]["value"]
+        probes = [fp.SequenceProbe(id=f"{feature}:{name}={cls}",
+                                   inputs=[*prefix, f"fill[{name}]={cls}", *([submit] if submit else [])],
+                                   tags=["s:field", f"field:{name}", f"val:{kind}.{cls}"]) for cls in values]
+        first = fp.run_sequences(self._worker_session, probes, workers=workers)
+        second = {r.probe.id: r.symbol for r in fp.run_sequences(self._worker_session, probes, workers=workers)}
+        typed = {p.id: values[p.id.rsplit("=", 1)[1]] for p in probes}
+
+        def outcome_of(result) -> dict[str, Any]:
+            return fp.outcome(describe_symbol(result.symbol), typed[result.probe.id], keys=keys)
+
+        nondet = {r.probe.id for r in first if fp.outcome_json(r.symbol, typed[r.probe.id])
+                  != fp.outcome_json(second[r.probe.id], typed[r.probe.id])}
+        # Rows keep the literal outcome (the typed value is part of the row, so its echo is reproducible); mining
+        # and acceptance compare echo-masked outcomes.
+        literal = {r.probe.id: fp.outcome_json(r.symbol) for r in first}
+        for r in first:
+            r.symbol = json.dumps(outcome_of(r), sort_keys=True, ensure_ascii=False)
+        table = ProbeTable(
+            feature=feature, target=self.state.target, mapper=self.state.mapper,
+            actions={k: v for k, v in self.action_table().items() if k in {*prefix, submit, *actions}},
+            rows=[ProbeRow(action=r.probe.inputs[-1], prefix=r.probe.inputs[:-1], expect=literal[r.probe.id],
+                           tags=r.probe.tags, match="subset") for r in first if r.probe.id not in nondet],
+            excluded={pid: "nondeterministic" for pid in sorted(nondet)},
+        )
+        state = self.state
+        if feature in state.probes:  # extend an existing table for the feature
+            old = self.workspace.get(state.probes[feature], ProbeTable)
+            table = ProbeTable(feature=feature, target=old.target, mapper=old.mapper,
+                               actions={**old.actions, **table.actions}, rows=[*old.rows, *table.rows],
+                               excluded={**old.excluded, **table.excluded}, discovery=old.discovery,
+                               mixed=old.mixed)
+        self.workspace.put(table)
+        self._save(self.state.model_copy(update={"probes": {**self.state.probes, feature: table.id}}))
+        reference_outcome = next((describe_symbol(r.symbol) for r in first
+                                  if r.probe.id.endswith(f"={valid}")), None) if valid else None
+        is_refused, describe = fp.judge(reference_outcome, accept, live=submit is None)
+        import functools
+
+        mined, mixed = mine(feature, "the form", first, exclude=nondet,
+                            outcome=functools.partial(fp.outcome, keys=keys), describe=describe, refused=is_refused)
+        for m in mined:
+            checks = [_drop_masked_text(c) for c in m.checks]
+            head, *rest = checks
+            layer = fp.layer_of(m.outcome) if m.kind == "refusal" else "unknown"
+            claim = self.propose_claim(feature=feature, kind=m.kind, statement=m.statement, inputs=head.inputs,
+                                       expect=head.expect, match="subset", cases=rest, layer=layer)
+            self.ledger.record_batch(claim.id, 2 * len(m.checks), [])
+        for row in mixed:
+            self.ledger.record_unknown(feature, f"value class '{row['class']}' of {row['factor']} has mixed outcomes",
+                                       ["partition this class further"])
+        if boundary_found is None and boundary:
+            self.ledger.record_unknown(feature, f"no length limit observed for field '{name}' up to 4096 characters "
+                                       "(or no accepted reference)", ["probe longer values", "check server limits"])
+        summary = {"feature": feature, "field": name, "classes": len(values), "boundary": boundary_found,
+                   "min_length": shortest,
+                   "claims": len(mined), "nondeterministic": len(nondet)}
+        self.audit.append("field-probe", {"table": table.id}, summary)
+        return {"table": table.id, "classes": len(values), "boundary": boundary_found, "min_length": shortest,
+                "claims": len(mined),
+                "mixed": len(mixed), "nondeterministic": sorted(nondet),
+                "boundary_actions": [a for a in actions if a.endswith(("=len_at_max", "=len_over_max",
+                                                                         "=len_at_min", "=len_under_min"))]}
+
+    # -- clean-side channels -----------------------------------------------------------------------------------
+    def verifier(self) -> Verifier:
+        def open_original(rel: SpecRelease) -> ObservationSession:
+            state = self.state
+            # released test inputs name actions after the codename substitution ("click[link:Old Granary
+            # <codename>]"); the original runs the real action under that released name as well
+            table = self.action_table()
+            table = {**{rename_text(n, state.gate): a for n, a in table.items()}, **table}
+            return ObservationSession(self.workspace,
+                                      open_driver(state.target_spec, table, state.target_options),
+                                      self.mapper())
+
+        def open_clone(clone_target: str, rel: SpecRelease, adapter: dict[str, Any] | None) -> ObservationSession:
+            adapter = adapter or {}
+            # A web clone against the same self-hosted backend needs the same per-episode backend reset.
+            if adapter.get("target_options") is not None:  # e.g. a desktop clone's launch argv
+                options = adapter["target_options"]
+            elif clone_target.split(":", 1)[0] == self.state.target_spec.split(":", 1)[0]:
+                options = self.state.target_options
+            else:
+                options = None
+            driver = open_driver(clone_target, adapter.get("actions") or rel.spec.get("actions") or {}, options)
+            # Built-in abstractions (CLI behavior, structured accessibility snapshot) are public and apply to the
+            # clone too. The original's rules stay dirty-side; the clean side supplies its own adapter rules that
+            # map its UI onto the released vocabulary. Clone evidence goes to a scratch workspace.
+            abstraction = rel.spec.get("abstraction") or {}
+            version = MapperVersion(target=driver.target_fingerprint(), builtin=abstraction.get("builtin"),
+                                    params=abstraction.get("params") or {},
+                                    rules=[MapperRule.model_validate(r) for r in adapter.get("rules", [])])
+            return ObservationSession(Workspace(self.root / "clone-runs"), driver, Mapper(version))
+
+        gate = self.state.gate
+        return Verifier(
+            rename=lambda symbol: rename_symbol(symbol, gate),
+            releases_dir=self.releases_dir,
+            open_original=open_original,
+            open_clone=open_clone,
+            ledger=self.ledger,
+            audit=self.audit,
+        )
+
+    def tickets(self) -> list[dict[str, Any]]:
+        if not self.tickets_dir.exists():
+            return []
+        return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(self.tickets_dir.glob("tkt_*.json"))]
+
+    def answer_ticket(self, ticket_id: str, answer: str) -> dict[str, Any]:
+        """Answers are gate-checked like spec text; in strict mode a finding blocks the answer."""
+        from teardown.gate.matcher import CorpusMatcher
+
+        path = self.tickets_dir / f"{ticket_id}.json"
+        ticket = json.loads(path.read_text(encoding="utf-8"))
+        gate = self.state.gate
+        match = CorpusMatcher(self.workspace.corpus()).longest(answer)
+        leak = bool(match and match.length >= gate.min_tokens)
+        if leak and gate.mode is GateMode.STRICT:
+            raise PermissionError("strict mode: the answer quotes observed text verbatim; rephrase it")
+        ticket.update(status="answered", answer=answer, gate_warning="verbatim text from the target" if leak else None)
+        path.write_text(json.dumps(ticket, indent=1), encoding="utf-8")
+        self.audit.append("ticket-answered", {}, {"ticket": ticket_id, "gate_warning": leak})
+        return ticket

@@ -1,0 +1,42 @@
+# Clean-room deployment: the dirty-zone gate and an isolated clean workspace.
+#
+#   TEARDOWN_PROJECT=/abs/path/to/project TEARDOWN_KIT=/abs/path/to/kit GATE_TOKEN=... docker compose up -d
+#
+# - gate: runs the verifier/spec/ticket service for one project. It needs the project directory and the Docker
+#   socket (to run the original and the clone images). It is the only service on both networks.
+# - clean: the implementer's workspace. It sees only the kit directory and the `cleanroom` network, which is
+#   internal (no route to the internet or the host). Its only peer is the gate. Model API access for an agent
+#   running here must go through an explicit egress proxy you add to this network (see docs/clean-runtime.md).
+name: teardown-cleanroom
+services:
+  gate:
+    build: {context: .., dockerfile: deploy/Dockerfile}
+    command: ["teardown", "gate-serve", "--project", "/project", "--host", "0.0.0.0", "--port", "8765",
+              "--token", "${GATE_TOKEN:?set GATE_TOKEN}"]
+    environment:
+      # Docker-outside-of-Docker: bind-mount sources are resolved by the host daemon, so the toolbox cache is
+      # mounted at its host path and announced to the runner at that same path.
+      TEARDOWN_CACHE: ${HOME}/.cache/teardown
+    volumes:
+      - ${TEARDOWN_PROJECT:?set TEARDOWN_PROJECT}:/project
+      - ${TEARDOWN_KIT:?set TEARDOWN_KIT}:/kit:ro
+      - ${HOME}/.cache/teardown:${HOME}/.cache/teardown
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [cleanroom, outside]
+  clean:
+    build: {context: .., dockerfile: deploy/Dockerfile}
+    command: ["sleep", "infinity"]
+    working_dir: /kit
+    environment:
+      TEARDOWN_GATE_URL: http://gate:8765
+      TEARDOWN_GATE_TOKEN: ${GATE_TOKEN}
+    volumes:
+      - ${TEARDOWN_KIT:?set TEARDOWN_KIT}:/kit
+    networks: [cleanroom]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+networks:
+  cleanroom: {internal: true}
+  outside: {}

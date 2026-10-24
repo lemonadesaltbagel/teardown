@@ -1,0 +1,32 @@
+# Agent workspace for the enforced rooms (Claude Code + Teardown): the implementer in the clean room, the observer
+# in the observer room. The container sees one directory; its only network peer is the egress proxy.
+FROM node:22-slim AS node
+FROM eclipse-temurin:21-jdk AS jdk
+FROM python:3.12-slim
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules /usr/local/lib/node_modules
+# javac for Android clones (compile-check against the SDK stub mounted at /opt/android/android.jar)
+COPY --from=jdk /opt/java/openjdk /opt/java/openjdk
+ENV JAVA_HOME=/opt/java/openjdk PATH=/opt/java/openjdk/bin:$PATH
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+ && npm install -g --no-fund --no-audit @anthropic-ai/claude-code \
+ && npm cache clean --force
+COPY pyproject.toml README.md LICENSE NOTICE /opt/teardown/
+COPY docs/observer-playbook.md /opt/teardown/docs/
+# the room files the wheel carries (pyproject force-include), named one by one: no local keys or build outputs
+COPY deploy/Dockerfile deploy/Dockerfile.clean deploy/cleanroom.yaml deploy/observerroom.yaml deploy/compose.yaml \
+     /opt/teardown/deploy/
+COPY deploy/clean /opt/teardown/deploy/clean
+COPY deploy/desktop-linux /opt/teardown/deploy/desktop-linux
+COPY deploy/android-agent/AndroidManifest.xml deploy/android-agent/build.sh /opt/teardown/deploy/android-agent/
+COPY deploy/android-agent/src /opt/teardown/deploy/android-agent/src
+COPY src /opt/teardown/src
+RUN pip install --no-cache-dir /opt/teardown
+# Managed settings apply to every Claude Code session in the container and cannot be overridden by the agent.
+COPY deploy/clean/managed-settings.json /etc/claude-code/managed-settings.json
+COPY deploy/clean/verify /usr/local/bin/verify
+COPY deploy/clean/room-claude /usr/local/bin/room-claude
+RUN chmod 755 /usr/local/bin/verify /usr/local/bin/room-claude && useradd -m -u 1000 clean
+USER clean
+WORKDIR /kit

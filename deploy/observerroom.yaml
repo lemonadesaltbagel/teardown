@@ -1,0 +1,47 @@
+# Enforced observer room on one machine (started by `teardown observerroom up`).
+#
+# - The observe MCP server runs on the host (the dirty zone): drivers keep their privileges (Docker, browser, adb)
+#   and stay the only way to touch the target.
+# - observer: the observer agent's container. It sees only its scratch workspace and the `observerroom` network,
+#   which is internal. Its only peer is egress.
+# - egress: the allowlisting proxy (observe server + model API only; never the target) with a per-attempt log.
+name: teardown-observerroom
+services:
+  egress:
+    build: {context: .., dockerfile: deploy/Dockerfile}
+    command: ["sh", "-c", "exec teardown egress-proxy --port 3128 --log /log/egress.jsonl $$(for a in $$EGRESS_ALLOW; do printf -- '--allow %s ' $$a; done)"]
+    environment:
+      EGRESS_ALLOW: ${EGRESS_ALLOW:?set EGRESS_ALLOW}
+    volumes:
+      - ${ROOM_LOG:?set ROOM_LOG}:/log
+    networks: [observerroom, outside]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+  observer:
+    build: {context: .., dockerfile: deploy/Dockerfile.clean}
+    command: ["sleep", "infinity"]
+    working_dir: /work
+    environment:
+      HTTP_PROXY: http://egress:3128
+      HTTPS_PROXY: http://egress:3128
+      http_proxy: http://egress:3128
+      https_proxy: http://egress:3128
+      NO_PROXY: ""
+      NODE_USE_ENV_PROXY: "1"
+      MCP_TOOL_TIMEOUT: "3600000"  # observe tools run whole probe batches; calls are serialized on the server
+      TEARDOWN_OBSERVE_URL: ${OBSERVE_URL:?set OBSERVE_URL}
+      TEARDOWN_OBSERVE_TOKEN: ${OBSERVE_TOKEN:?set OBSERVE_TOKEN}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      HOME: /home/clean
+    volumes:
+      - ${WORKSPACE:?set WORKSPACE}:/work
+    networks: [observerroom]
+    read_only: true
+    tmpfs: [/tmp, "/home/clean:uid=1000,gid=1000"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+networks:
+  observerroom: {internal: true}
+  outside: {}

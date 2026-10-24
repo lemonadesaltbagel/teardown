@@ -1,0 +1,21 @@
+#!/bin/sh
+# Start Claude Code with only this room's Teardown MCP server registered:
+#   observer room -> the observe server over HTTP (through the egress proxy)
+#   clean room    -> the clean server, which talks to the gate
+set -e
+cfg=/tmp/teardown-mcp.json
+if [ -n "$TEARDOWN_OBSERVE_URL" ]; then
+  python3 - "$cfg" <<'PY'
+import json, os, sys
+json.dump({"mcpServers": {"teardown": {"type": "http", "url": os.environ["TEARDOWN_OBSERVE_URL"],
+           "headers": {"Authorization": "Bearer " + os.environ["TEARDOWN_OBSERVE_TOKEN"]}}}}, open(sys.argv[1], "w"))
+PY
+else
+  python3 - "$cfg" <<'PY'
+import json, os, sys
+json.dump({"mcpServers": {"teardown": {"type": "stdio", "command": "teardown", "args": [
+    "clean", "--gate-url", os.environ["TEARDOWN_GATE_URL"], "--token", os.environ["TEARDOWN_GATE_TOKEN"]]}}},
+          open(sys.argv[1], "w"))
+PY
+fi
+exec claude --mcp-config "$cfg" --strict-mcp-config "$@"

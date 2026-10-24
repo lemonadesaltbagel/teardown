@@ -1,0 +1,118 @@
+"""The observe MCP server over HTTP: token required, Host header checked, tools reachable."""
+
+from __future__ import annotations
+
+import asyncio
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+from teardown.project import Project
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _list_tools(url: str, token: str) -> list[str]:
+    from mcp.client.session import ClientSession
+    from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
+
+    async def go():
+        async with (create_mcp_http_client(headers={"Authorization": f"Bearer {token}"}) as http,
+                    streamable_http_client(url, http_client=http) as streams,
+                    ClientSession(streams[0], streams[1]) as session):
+            await session.initialize()
+            return [t.name for t in (await session.list_tools()).tools]
+
+    return asyncio.run(go())
+
+
+def test_observe_over_http_requires_the_token_and_serves_the_tools(tmp_path, monkeypatch):
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")  # a system proxy must not intercept loopback
+    project = tmp_path / "p"
+    Project(project).open_target("fake:signup-a", purpose="research")
+    port = _free_port()
+    proc = subprocess.Popen([sys.executable, "-m", "teardown.cli", "observe", "--project", str(project),
+                             "--port", str(port), "--token", "s3cret"], stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+    url = f"http://127.0.0.1:{port}/mcp"
+    try:
+        for _ in range(100):
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+                break
+            except OSError:
+                time.sleep(0.1)
+        try:
+            urllib.request.urlopen(urllib.request.Request(url, method="POST", data=b"{}"), timeout=5)
+            raise AssertionError("no token was accepted")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 401
+        tools = _list_tools(url, "s3cret")
+        assert {"open_target", "run_sequence", "check_rules", "compile_spec", "release_spec"} <= set(tools)
+        assert "approve_findings" not in tools
+        bad_host = urllib.request.Request(url, method="POST", data=b"{}", headers={
+            "Authorization": "Bearer s3cret", "Host": "evil.example:1", "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream"})
+        try:
+            urllib.request.urlopen(bad_host, timeout=5)
+            raise AssertionError("foreign Host header was accepted")
+        except urllib.error.HTTPError as exc:
+            assert exc.code in (400, 403, 421)
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+
+
+def test_long_calls_report_progress_so_clients_do_not_time_out(tmp_path, monkeypatch):
+    """A UI crawl on a real app outlasted a client's 300-second idle timeout: long calls now send progress."""
+    import os
+
+    from mcp.client.session import ClientSession
+    from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
+
+    from teardown.drivers.web.driver import EXAMPLES, LocalSite
+
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    site = LocalSite(EXAMPLES)
+    project = tmp_path / "p"
+    Project(project).open_target("web:" + site.url("signup_a.html"), purpose="research")
+    port = _free_port()
+    proc = subprocess.Popen([sys.executable, "-m", "teardown.cli", "observe", "--project", str(project),
+                             "--port", str(port), "--token", "t"], stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, env={**os.environ, "TEARDOWN_HEARTBEAT_S": "0.2"})
+    url = f"http://127.0.0.1:{port}/mcp"
+    progress: list[float] = []
+
+    async def go():
+        async with (create_mcp_http_client(headers={"Authorization": "Bearer t"}) as http,
+                    streamable_http_client(url, http_client=http) as streams,
+                    ClientSession(streams[0], streams[1]) as session):
+            await session.initialize()
+
+            async def on_progress(value, total, message):
+                progress.append(value)
+
+            result = await session.call_tool("discover_ui", {"feature": "signup", "max_states": 4, "max_depth": 2},
+                                             progress_callback=on_progress)
+            return result.is_error
+
+    try:
+        for _ in range(100):
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+                break
+            except OSError:
+                time.sleep(0.1)
+        assert asyncio.run(go()) is False
+        assert progress and progress == sorted(progress)  # heartbeats arrived while the crawl ran
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+        site.close()

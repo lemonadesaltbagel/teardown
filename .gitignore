@@ -1,0 +1,33 @@
+# environments
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
+*.egg-info/
+
+# local reference clones (not ours)
+refs/
+
+# spike artifacts (large / regenerable)
+spikes/**/.venv/
+spikes/**/out/
+spikes/**/results/
+spikes/**/logs/
+spikes/**/*.tgz
+
+# runtime stores
+.teardown/
+
+# captured third-party target content stays local
+spikes/desktop-ax/*.json
+bench/jq/hidden/
+
+# android example build outputs and debug keys
+src/teardown/examples/android*/build/
+src/teardown/examples/android*/debug.keystore
+deploy/android-agent/build/
+deploy/android-agent/debug.keystore
