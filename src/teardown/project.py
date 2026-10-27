@@ -636,11 +636,16 @@ class Project:
         report = self.state.coverage.get(feature)
         if report is None:
             return []
-        prefix = "not exercised by any probe or rule: "
-        explained = {u.identity.question[len(prefix):] for u in self.ledger.unknowns().values()
-                     if u.identity.feature == feature and u.identity.question.startswith(prefix)
-                     and u.status != "open"}
+        explained = self.gap_explanations(feature)
         return [g for g in report.get("uncovered", []) if g not in explained]
+
+    def gap_explanations(self, feature: str) -> dict[str, str]:
+        """Coverage gap -> the observer's explanation ("out-of-scope: needs a second account"), for the gaps whose
+        unknown the observer has answered."""
+        prefix = "not exercised by any probe or rule: "
+        return {u.identity.question[len(prefix):]: f"{u.status.value}: {u.note}".rstrip(": ")
+                for u in self.ledger.unknowns().values()
+                if u.identity.feature == feature and u.identity.question.startswith(prefix) and u.status != "open"}
 
     def release_spec(self, draft_id: str, approved_by: str | None = None, *,
                      accept_gaps: str | None = None) -> SpecRelease:
@@ -899,6 +904,7 @@ class Project:
                   for item, patterns in items.items()}
         if state.target_spec.startswith("web:"):
             counts.update(self._fault_coverage(feature, table))
+            counts.update(self._mode_coverage(feature, table))
             counts.update(self._data_state_coverage(feature, table))
             counts.update(self._route_coverage(feature, table)["counts"])
         if not state.target_spec.startswith("cli:"):
@@ -915,9 +921,12 @@ class Project:
             now_covered = set(counts) - set(uncovered)
             for u in self.ledger.unknowns().values():  # gaps this run shows covered are answered
                 q = u.identity.question
-                if (u.identity.feature == feature and u.status == "open" and q.startswith(prefix)
-                        and q[len(prefix):] in now_covered):
+                if u.identity.feature != feature or u.status != "open" or not q.startswith(prefix):
+                    continue
+                if q[len(prefix):] in now_covered:
                     self.update_unknown(u.id, "resolved", "covered by a probe or rule")
+                elif q[len(prefix):] not in counts:  # e.g. a literal path, before api_templates named it
+                    self.update_unknown(u.id, "resolved", "no longer a coverage item")
         self.audit.append("coverage", {}, {"feature": feature, "items": len(items), "uncovered": len(uncovered)})
         return {"items": len(items), "covered": len(items) - len(uncovered), "uncovered": uncovered,
                 "counts": counts}
@@ -1040,6 +1049,15 @@ class Project:
             return next((sc for sc in screens.values() if key in sc[kind]), None)
 
         for item in report["uncovered"]:
+            if item.startswith("mode "):
+                _, method, path, field = item.split(" ", 3)
+                out.append({"item": item, "kind": "mode", "action": {"op": "fault", "fault": {
+                    "path": re.sub(r"\{[^}]+\}", "*", path), "method": method, "mode": "patch",
+                    "set": {field: True}}},
+                    "reach": "the app makes this call on nearly every page: put the fault first, then load a page",
+                    "suggest": "set the field to the value the app does not report now (true or false) and state "
+                               "what the UI shows differently in that mode, on each page that changes"})
+                continue
             if item.startswith("fault "):
                 _, method, path, cls = item.split(" ", 3)
                 glob = re.sub(r"\{[^}]+\}", "*", path)
@@ -1057,7 +1075,9 @@ class Project:
                 out.append({"item": item, "kind": "fault", "action": fault,
                             **({"observed_as": observed} if observed else {}),
                             "reach": reach or "no discovered path makes this call; it may happen at start-up "
-                                              "(put the fault first and reset) or after a form submission",
+                                              "(put the fault first, then load a page; a call made only on a "
+                                              "first visit needs [fault, clear_storage, reload]) or after a form "
+                                              "submission",
                             "suggest": "define the fault action and state a rule on what the UI shows with "
                                        "[fault, ...reach]"})
             elif item.startswith("field "):
@@ -1281,15 +1301,17 @@ class Project:
         non-dict outcomes ("NA", "DISABLED")."""
         from teardown.engine.rules import RuleTable
 
-        pairs: list[tuple[list[str], str | None]] = [([*r.prefix, r.action], r.expect)
+        pairs: list[tuple[Any, ...]] = [([*r.prefix, r.action], r.expect)
                                                      for r in (table.rows if table else [])]
         if feature in self.state.rules:
             for rule in self.workspace.get(self.state.rules[feature], RuleTable).rules:
                 for c in rule.checks:
-                    pairs += [(c.a_inputs or [], c.observed_a), (c.b_inputs or [], c.observed_b)]
+                    pairs += [(c.a_inputs or [], c.observed_a, c.calls_a), (c.b_inputs or [], c.observed_b, c.calls_b)]
         out = []
-        for seq, symbol in pairs:
+        for seq, symbol, *calls in [(*p, None) if len(p) == 2 else p for p in pairs]:
             value = describe_symbol(symbol) if isinstance(symbol, str) else None
+            if isinstance(value, dict) and calls and calls[0] is not None:
+                value = {**value, "network": calls[0]}  # every call the sequence made, not only the last step's
             if seq and (isinstance(value, dict) or (raw and value is not None)):
                 out.append((seq, value))
         return out
@@ -1324,6 +1346,40 @@ class Project:
             for method in methods:
                 for cls in self.FAULT_CLASSES:
                     counts[f"fault {method.upper()} {bare} {cls}"] = credits.get((method.upper(), bare, cls), 0)
+        return counts
+
+    def _mode_coverage(self, feature: str, table: Any) -> dict[str, int]:
+        """Web: server modes the UI may read. Each boolean field outside lists in the response of a singleton GET
+        resource (no path parameters: the app's configuration, the signed-in user) ->
+        ``mode GET <path> <field>``, credited when a ``patch`` fault set that field and the call was made."""
+        from teardown.drivers.web.driver import path_glob
+
+        named = self.action_table()
+        templates = list(self.state.target_options.get("api_templates", []))
+        observed = self._observed_sequences(feature, table)
+        paths = self.api_contract()["paths"]
+        singletons = sorted(p for p, ops in paths.items() if "get" in ops and "{" not in p and "?" not in p)
+
+        def booleans(shape: Any, prefix: str = "") -> list[str]:
+            if not isinstance(shape, dict):
+                return []
+            return [f for k, v in shape.items() for f in (
+                [prefix + k] if v == "boolean" else booleans(v, f"{prefix}{k}."))]
+
+        counts: dict[str, int] = {}
+        for path in singletons:
+            shape = ((paths.get(path) or {}).get("get") or {}).get("responses", {}).get("200", {}).get("shape")
+            for field in booleans(shape)[:12]:
+                credited = 0
+                for seq, symbol in observed:
+                    calls = {_contract_path(e.partition(" ")[2].rsplit(" ", 1)[0].split("?", 1)[0], templates)
+                             for e in symbol.get("network") or [] if e.upper().startswith("GET ")}
+                    patches = [named[n]["fault"] for n in seq if named.get(n, {}).get("op") == "fault"
+                               and (named[n].get("fault") or {}).get("mode") == "patch"]
+                    if path in calls and any(field in (f.get("set") or {}) and path_glob(f.get("path", "**"))(path)
+                                             for f in patches):
+                        credited += 1
+                counts[f"mode GET {path} {field}"] = credited
         return counts
 
     # -- rules ---------------------------------------------------------------------------------------------------
@@ -1400,6 +1456,7 @@ class Project:
         workers = self.max_workers(workers)
         invocations: dict[str, dict[str, Any]] = {}
         sequences: dict[str, list[str]] = {}
+        calls: dict[str, list[str]] = {}
         for spec in specs:
             for check in spec.checks:
                 for side in (check.a, check.b):
@@ -1413,7 +1470,15 @@ class Project:
             from teardown.engine.fieldprobe import SequenceProbe, run_sequences
 
             seq_probes = [SequenceProbe(id=k, inputs=v) for k, v in sequences.items()]
-            first = {r.probe.id: r.symbol for r in run_sequences(self._worker_session, seq_probes, workers=workers)}
+            ran = run_sequences(self._worker_session, seq_probes, workers=workers)
+            first = {r.probe.id: r.symbol for r in ran}
+            for r in ran:
+                seen: dict[str, None] = {}
+                for out in r.outputs:
+                    value = R.describe_symbol(out) if isinstance(out, str) else None
+                    for entry in (value.get("network") or []) if isinstance(value, dict) else []:
+                        seen.setdefault(entry)
+                calls[r.probe.id] = list(seen)
             second = {r.probe.id: r.symbol for r in run_sequences(self._worker_session, seq_probes, workers=workers)}
         else:
             first, second = {}, {}
@@ -1436,6 +1501,8 @@ class Project:
         records = []
         for spec in specs:
             results = [R.evaluate(c, first) for c in spec.checks]
+            results = [r.model_copy(update={"calls_a": calls.get(r.a), "calls_b": calls.get(r.b) if r.b else None})
+                       if r.a in calls else r for r in results]
             noisy = any(r.a in unstable or (r.b in unstable) for r in results)
             status = "contested" if noisy else R.status_of(results)
             rid = content_id("rle", {"feature": feature, "statement": spec.statement,
@@ -1462,6 +1529,24 @@ class Project:
         def unstable_checks(r: R.RuleRecord) -> list[int]:
             return [i for i, c in enumerate(r.checks) if c.a in unstable or (c.b in unstable)]
 
+        def faults_not_met(r: R.RuleRecord) -> list[str]:  # a fault no call of its sequence met tested nothing
+            from teardown.drivers.web.driver import path_glob
+
+            named, missed = self.action_table(), []
+            for c in r.checks:
+                for seq, made in ((c.a_inputs or [], c.calls_a), (c.b_inputs or [], c.calls_b)):
+                    if made is None:
+                        continue
+                    for n in seq:
+                        f = named.get(n, {}).get("fault") if named.get(n, {}).get("op") == "fault" else None
+                        if not f or f.get("mode") in ("release", "clear") or n in missed:
+                            continue
+                        if not any(path_glob(f.get("path", "**"))(e.partition(" ")[2].rsplit(" ", 1)[0].split("?")[0])
+                                   and (not f.get("method") or e.partition(" ")[0].upper() == f["method"].upper())
+                                   for e in made):
+                            missed.append(n)
+            return missed
+
         return {"table": table.id, "rules": [{
             "id": r.id, "statement": r.statement, "status": r.status,
             "failed_checks": [i for i, c in enumerate(r.checks) if not c.holds],
@@ -1470,7 +1555,14 @@ class Project:
                 "note": "contested: these checks' sequences gave different observations on two runs, so the rule "
                         "cannot be confirmed; restrict keys to what the rule is about, mask clock text "
                         "(mask_dates), or let the page settle (a press of a harmless key) before the last step"}
-               if r.status == "contested" else {})} for r in records]}
+               if r.status == "contested" else {}),
+            **({"faults_not_met": missed,
+                "faults_note": "no call these faults match was made in the sequence, so the rule shows nothing about "
+                               "them (and they credit no coverage): make the call after the fault, e.g. by "
+                               "navigating to the page that makes it (suggest_probes gives a path). A call the app "
+                               "makes only on a first visit (it remembers a session in web storage) needs "
+                               "clear_storage and a reload after the fault"}
+               if (missed := faults_not_met(r)) else {})} for r in records]}
 
     # -- web field probing -------------------------------------------------------------------------------------
     def probe_ui_field(self, *args: Any, **kwargs: Any) -> dict[str, Any]:

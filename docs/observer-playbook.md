@@ -42,8 +42,11 @@ either with a probe or rule or with a recorded reason. The tool names are the ob
 - **Web:** for every endpoint and fault class (5xx, network, malformed), state what the UI shows. Include the
   calls made at start-up: put the fault action first, then navigate. Use `hang` and `release` for loading and
   disabled states.
-- **Server modes:** when the UI reads a mode from the server (read-only storage, a maintenance flag, a disabled
-  feature, an auth method), switch it on with a `patch` fault on that response and observe every section in it.
+- **Server modes:** when the UI reads a mode from the server (a maintenance flag, a disabled feature, an auth
+  method, a plan or role limit), switch it on with a `patch` fault on that response and observe every section in it.
+  Coverage lists the boolean fields it saw as `mode` items. A flag that is off may be missing from the response
+  entirely, so add the modes the server documents to the inventory yourself.
+- **Check that each fault met its call:** `check_rules` names faults no call met under `faults_not_met`.
 - **Android:** `network` off when the app uses the network.
 
 ## 4. Rules (40% of the time)

@@ -31,6 +31,8 @@ PLAYBOOK_FALLBACK = ("Open the target; discover_ui; probe every field; inject fa
 
 
 HEARTBEAT_S = float(os.environ.get("TEARDOWN_HEARTBEAT_S", "15"))  # progress interval for long calls
+MAX_CALL_S = float(os.environ.get("TEARDOWN_MAX_CALL_S", "200"))  # longest budget a call may ask for (MCP clients
+# commonly give up after 300 s without a response)
 
 
 def _reset_browser() -> None:
@@ -236,8 +238,12 @@ def build_observe_server(project: Project) -> MCPServer:
                  "a: invocation, b: invocation (same/differs), expect: subset (outcome), keys: [..] (optional)}]}. "
                  "Falsified documented rules are reported as documentation/behavior conflicts.")
     def check_rules(feature: str, rules: list[dict[str, Any]], max_seconds: float = 200) -> dict[str, Any]:
-        # a large batch outlasts MCP clients' idle timeouts: after max_seconds the rest return as not_checked
-        return project.check_rules(feature, rules, max_seconds=max_seconds)
+        # a large batch outlasts MCP clients' idle timeouts: after max_seconds the rest return as not_checked; the
+        # budget is capped below a 300-second client timeout, since one rule can still run a minute past it
+        out = project.check_rules(feature, rules, max_seconds=min(max_seconds, MAX_CALL_S))
+        if max_seconds > MAX_CALL_S and out.get("not_checked"):
+            out["note"] += f" (a call's budget is at most {MAX_CALL_S:.0f}s, below the client's timeout)"
+        return out
 
     @server.tool(description="Coverage of a feature inventory {item: [patterns]} by probes and rule checks "
                  "(options are added automatically). Uncovered items become unknowns.")
@@ -316,7 +322,7 @@ def build_observe_server(project: Project) -> MCPServer:
         # max_seconds: the crawl stops there and returns what it found (truncated); runs accumulate, so another
         # call (another start point, or a smaller max_depth) continues the inventory
         return project.discover_ui(feature, start=start, max_states=max_states, max_depth=max_depth, fill=fill,
-                                   max_seconds=max_seconds)
+                                   max_seconds=min(max_seconds, MAX_CALL_S + 40))
 
     @server.tool(description="Concrete next steps for the feature's coverage gaps: fault actions with a path that "
                  "makes the call, probe_web_field arguments for unprobed fields, click paths for unexercised "

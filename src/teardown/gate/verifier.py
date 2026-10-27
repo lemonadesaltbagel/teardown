@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from teardown.audit.log import AuditLog
 from teardown.core.model import ContentAddressed
+from teardown.drivers.base import DeviceLost
 from teardown.drivers.session import ObservationSession
 from teardown.engine.claims import ClaimLedger
 from teardown.engine.mapper import symbol_matches
@@ -105,6 +106,17 @@ def conformance_suite(rel: SpecRelease, max_tests: int = 5000) -> list[_Test]:
     return tests[:max_tests]
 
 
+def content_hash(text: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+def _test_key(test: _Test) -> str:
+    return content_hash(json.dumps({"inputs": test.inputs, "relation": test.relation, "other": test.other,
+                                    "keys": test.keys, "kind": test.kind}, sort_keys=True))
+
+
 class Verifier:
     def __init__(
         self,
@@ -129,16 +141,30 @@ class Verifier:
         self._budget_file = releases_dir / "verify-budget.json"
 
     def verify(self, clone_target: str, release_id: str | None = None, repeats: int = 2,
-               adapter: dict[str, Any] | None = None) -> AbstractVerdict:
+               adapter: dict[str, Any] | None = None, only: str | None = None) -> AbstractVerdict:
         """``adapter`` (clean-side data): {"actions": {name: action}, "rules": [mapper rules]} mapping the clone's
-        own UI onto the released action names and output vocabulary. Needed for UI targets, optional for CLIs."""
+        own UI onto the released action names and output vocabulary. Needed for UI targets, optional for CLIs.
+
+        Speed on large targets: the original's runs are cached per release, and each call re-checks a rotating
+        sample of them (any difference drops the cache); ``only="failed"`` runs just the tests this clone did not
+        pass last time (the verdict then covers those tests only)."""
         rel = load_release(self.releases_dir, release_id)
         calls = json.loads(self._budget_file.read_text()) if self._budget_file.exists() else {}
         if calls.get(rel.id, 0) >= self.max_calls:
             raise BudgetExceeded(f"verification budget for this release is spent ({self.max_calls} calls)")
         calls[rel.id] = calls.get(rel.id, 0) + 1
         self._budget_file.write_text(json.dumps(calls))
+        try:
+            return self._verify(rel, calls[rel.id], clone_target, repeats, adapter, only)
+        except Exception as exc:
+            if not isinstance(exc, ValueError):  # the gate failed (not the build): the call is not spent
+                calls = json.loads(self._budget_file.read_text())
+                calls[rel.id] = max(0, calls.get(rel.id, 1) - 1)
+                self._budget_file.write_text(json.dumps(calls))
+            raise
 
+    def _verify(self, rel: SpecRelease, call: int, clone_target: str, repeats: int,
+                adapter: dict[str, Any] | None, only: str | None) -> AbstractVerdict:
         vocabulary = {o["symbol"] for o in (rel.spec.get("model") or {}).get("outputs", [])}
         vocabulary |= {row["expect"] for row in rel.spec.get("probe_table", []) if row.get("match", "exact") == "exact"}
         for claim in rel.spec.get("claims", []):
@@ -146,21 +172,53 @@ class Verifier:
                 if check.get("match", "exact") == "exact":
                     vocabulary |= {e for e in check["expect"] if e is not None}
         tests = conformance_suite(rel, self.max_tests)
+        last_file = self.releases_dir / "verify-last" / f"{rel.id}-{content_hash(clone_target)}.json"
+        last = json.loads(last_file.read_text()) if last_file.exists() else {}
+        selected = [i for i in range(len(tests))
+                    if only != "failed" or not last or last.get(str(i)) != "pass"]
+        cache_file = self.releases_dir / "verify-cache" / f"{rel.id}.json"
+        cache: dict[str, Any] = json.loads(cache_file.read_text()) if cache_file.exists() else {}
         original = self.open_original(rel)
         clone = self.open_clone(clone_target, rel, adapter)
         results: list[TestResult] = []
+
+        def original_runs(test: _Test) -> Any:
+            if test.relation:
+                return all(self._relation_holds(test, original, self.rename)[0] for _ in range(max(1, repeats)))
+            return [[self.rename(o) for o in original.run(test.inputs, use_cache=False)[0]]
+                    for _ in range(max(1, repeats))]
+
         try:
-            for i, test in enumerate(tests):
+            if cache:  # the original may have changed since: re-check a rotating sample before trusting the cache
+                keyed = [i for i in selected if _test_key(tests[i]) in cache]
+                start = call * 3
+                sample = [keyed[(start + k) % len(keyed)] for k in range(min(len(keyed), max(3, len(keyed) // 20)))]
+                if any(original_runs(tests[i]) != cache[_test_key(tests[i])] for i in dict.fromkeys(sample)):
+                    cache = {}
+            def once_more_if_the_device_died(fn):
+                try:
+                    return fn()
+                except DeviceLost:  # the driver brings the device back at the next reset: run the episode again
+                    return fn()
+
+            for i in selected:
+                test, key = tests[i], _test_key(tests[i])
+                if key not in cache:
+                    cache[key] = once_more_if_the_device_died(lambda test=test: original_runs(test))
                 if test.relation:
-                    results.append(self._judge_relation(i, test, original, clone, repeats))
+                    results.append(once_more_if_the_device_died(
+                        lambda i=i, test=test, key=key: self._judge_relation(i, test, cache[key], clone)))
                     continue
-                runs = [[self.rename(o) for o in original.run(test.inputs, use_cache=False)[0]]
-                        for _ in range(max(1, repeats))]
-                observed = clone.run(test.inputs, use_cache=False)[0]
-                results.append(self._judge(i, test, runs, observed, vocabulary, rel.codename))
+                observed = once_more_if_the_device_died(lambda test=test: clone.run(test.inputs, use_cache=False)[0])
+                results.append(self._judge(i, test, cache[key], observed, vocabulary, rel.codename))
         finally:
             original.close()
             clone.close()
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(json.dumps(cache))
+        last.update({str(r.test): r.status for r in results})
+        last_file.parent.mkdir(parents=True, exist_ok=True)
+        last_file.write_text(json.dumps(last))
 
         verdict = AbstractVerdict(
             release=rel.id,
@@ -178,19 +236,20 @@ class Verifier:
         )
         return verdict
 
-    def _judge_relation(self, i: int, test: _Test, original, clone, repeats: int) -> TestResult:
+    @staticmethod
+    def _relation_holds(test: _Test, session, rename) -> tuple[bool, str, str]:
         from teardown.engine.rules import projection
 
-        def relation_holds(session, rename) -> tuple[bool, str, str]:
-            a = rename(session.run(test.inputs, use_cache=False)[0][-1])
-            b = rename(session.run(test.other, use_cache=False)[0][-1])
-            equal = projection(a, test.keys) == projection(b, test.keys)
-            return (equal if test.relation == "same" else not equal), a, b
+        a = rename(session.run(test.inputs, use_cache=False)[0][-1])
+        b = rename(session.run(test.other, use_cache=False)[0][-1])
+        equal = projection(a, test.keys) == projection(b, test.keys)
+        return (equal if test.relation == "same" else not equal), a, b
 
+    def _judge_relation(self, i: int, test: _Test, original_holds: bool, clone) -> TestResult:
         base = {"test": i, "kind": test.kind, "claim_id": test.claim_id, "inputs": [*test.inputs, *test.other]}
-        if not all(relation_holds(original, self.rename)[0] for _ in range(max(1, repeats))):
+        if not original_holds:
             return TestResult(**base, status="inconclusive", note="relation no longer holds on the original")
-        holds, a, b = relation_holds(clone, lambda s: s)
+        holds, a, b = self._relation_holds(test, clone, lambda s: s)
         if holds:
             return TestResult(**base, status="pass")
         return TestResult(**base, status="fail", expected=f"{test.relation} on {test.keys or 'all keys'}",

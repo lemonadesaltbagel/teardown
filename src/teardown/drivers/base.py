@@ -15,6 +15,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from teardown.core.model import ObservationTier
 
 
+class DeviceLost(RuntimeError):
+    """The device under observation went away mid-episode (an emulator crashed). The episode's observations are not
+    the target's behavior; a caller may retry the episode once the driver has brought the device back."""
+
+
 class Action(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

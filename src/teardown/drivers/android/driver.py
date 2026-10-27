@@ -29,7 +29,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from teardown.core.ids import content_id
-from teardown.drivers.base import Action, Driver, DriverCapabilities
+from teardown.drivers.base import Action, DeviceLost, Driver, DriverCapabilities
 
 ROLE_BY_CLASS = {
     "Button": "button", "ImageButton": "button", "MaterialButton": "button", "EditText": "textbox",
@@ -107,6 +107,20 @@ AGENT_PACKAGE = "dev.teardown.agent"
 AGENT_VERSION = 2  # deploy/android-agent/AndroidManifest.xml versionCode; an older agent on the device is replaced
 
 
+_AVDS: dict[str, str] = {}  # serial -> AVD name, learned when a driver first configures an emulator
+EMULATOR_ARGS = ["-no-window", "-no-audio", "-no-boot-anim", "-gpu", "swiftshader_indirect", "-no-snapshot-save"]
+
+
+def emulator_path() -> str:
+    found = shutil.which("emulator")
+    if found:
+        return found
+    candidate = Path.home() / "Library/Android/sdk/emulator/emulator"
+    if candidate.exists():
+        return str(candidate)
+    raise FileNotFoundError("emulator not found (install the Android emulator)")
+
+
 def agent_nodes(raw: dict[str, Any]) -> list[dict[str, Any]]:
     """Normalize the on-device agent's dump to the driver's node shape."""
     nodes = []
@@ -158,9 +172,52 @@ class AndroidDriver(Driver):
     def _configure(self) -> None:
         for key in ("window_animation_scale", "transition_animation_scale", "animator_duration_scale"):
             self._sh("shell", "settings", "put", "global", key, "0")
+        if self.serial.startswith("emulator-") and self.serial not in _AVDS:  # remember it, to restart it
+            name = self._sh("emu", "avd", "name", timeout=10).strip().splitlines()
+            if name and name[0] and "error" not in name[0].lower():
+                _AVDS[self.serial] = name[0].strip()
         self._configured = True
 
+    def device_state(self) -> str:
+        try:
+            cp = subprocess.run([self.adb, "-s", self.serial, "get-state"], capture_output=True, text=True,
+                                timeout=15)
+        except subprocess.TimeoutExpired:
+            return "unknown"
+        return cp.stdout.strip() or "absent"
+
+    def ensure_device(self, timeout_s: float = 300) -> None:
+        """Bring an emulator that crashed back (same AVD, same port, so the serial stays the same): the gate keeps
+        verifying instead of failing every later call. Physical devices and unknown AVDs are left alone."""
+        if self.device_state() == "device":
+            return
+        avd = (self.options.get("emulator") or {}).get("avd") or _AVDS.get(self.serial)
+        port = self.serial.removeprefix("emulator-")
+        if not avd or not port.isdigit():
+            raise DeviceLost(f"device {self.serial} is not available and cannot be restarted here")
+        subprocess.run([self.adb, "-s", self.serial, "emu", "kill"], capture_output=True, timeout=30)
+        args = (self.options.get("emulator") or {}).get("args") or EMULATOR_ARGS
+        log = Path.home() / ".teardown" / f"emulator-{port}.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("ab") as out:
+            subprocess.Popen([emulator_path(), "-avd", avd, "-port", port, *args], stdout=out, stderr=out,
+                             start_new_session=True)
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if self.device_state() == "device" and self._sh(
+                    "shell", "getprop", "sys.boot_completed", timeout=15).strip() == "1":
+                break
+            time.sleep(3)
+        else:
+            raise DeviceLost(f"device {self.serial} did not come back within {timeout_s:.0f} s")
+        self._agent_file, self._configured = None, False  # a fresh device: reconnect the agent, configure again
+        if self._agent_proc is not None:
+            self._agent_proc.kill()
+            self._agent_proc = None
+        self._configure()
+
     def reset(self) -> Any:
+        self.ensure_device()
         if not self._configured:
             self._configure()
         self._sh("shell", "am", "force-stop", self.package)
@@ -239,6 +296,8 @@ class AndroidDriver(Driver):
                 break
             time.sleep(0.3)
         if "<hierarchy" not in out:
+            if self.device_state() != "device":  # not an empty screen: the device is gone
+                raise DeviceLost(f"device {self.serial} went away")
             return []
         return parse_dump(out[: out.rfind("</hierarchy>") + len("</hierarchy>")])
 

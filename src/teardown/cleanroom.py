@@ -37,7 +37,9 @@ directory. Ask questions by writing them to `questions.md`.
 - `./verify.sh` builds the image and runs the conformance suite against your build and the original. It reports
   pass/fail counts and, for failing tests, the inputs plus expected and observed abstract symbols. Each call uses
   verification budget; batch your fixes. Inside an enforced clean room (`teardown cleanroom`) the command is
-  `verify` instead (same options): it asks the gate, which builds and runs your kit.
+  `verify` instead (same options): it asks the gate, which builds and runs your kit. `--only-failed` re-runs
+  just the tests your build did not pass last time, which is much faster on a large spec; finish with a full
+  run.
 """
 
 DOCKERFILE = """FROM python:3.12-slim
@@ -77,7 +79,8 @@ the network beyond the backend API named below; do not read anything outside thi
   `./verify.sh --adapter adapter.json` with `{{"actions": {{name: action}}, "rules": [mapper rules]}}`.
 - Inside an enforced clean room (`teardown cleanroom`) the command is `verify` instead (same options): it asks the
   gate, which serves your `impl/`. From the clean shell the backend is reachable at `$TEARDOWN_API_URL`; your app
-  itself must still call the address above, because the gate runs it.
+  itself must still call the address above, because the gate runs it. `--only-failed` re-runs just the tests
+  your build did not pass last time, which is much faster on a large spec; finish with a full run.
 """
 
 WEB_VERIFY = """#!/bin/sh
@@ -131,6 +134,8 @@ public documents placed in this directory). Do not look for, recall or reuse an 
   (`{package}`) and launcher; add permissions or activities you need. Android API 26–34; `android.*` only.
 - `verify` (inside the enforced clean room) or `./verify.sh` builds the APK, installs it on the verification
   device and runs the conformance suite against your build and the original. Build errors are reported back.
+  `--only-failed` re-runs just the tests your build did not pass last time, which is much faster on a large
+  spec; finish with a full run.
 - To compile-check locally (in the clean room): `javac --release 11 -cp /opt/android/android.jar -d /tmp/classes
   $(find src -name '*.java')`. There is no device or emulator on the clean side.
 """
@@ -221,7 +226,7 @@ class CloneError(ValueError):
     """A problem with the clone itself (build or install output): safe to report to the clean side verbatim."""
 
 
-def verify_kit(project, kit: Path, clone: str, adapter: dict | None = None) -> dict:
+def verify_kit(project, kit: Path, clone: str, adapter: dict | None = None, only: str | None = None) -> dict:
     """Verify a clone built from the kit: ``web:kit`` (static site from impl/), ``android:kit`` (APK from the kit's
     manifest and sources, installed on the original's device), ``cli:build:/kit`` (the kit's Dockerfile)."""
     kit = Path(kit).resolve()
@@ -230,7 +235,7 @@ def verify_kit(project, kit: Path, clone: str, adapter: dict | None = None) -> d
 
         site = LocalSite(kit / "impl", spa=True)
         try:
-            return project.verifier().verify("web:" + site.url(""), adapter=adapter).model_dump(mode="json")
+            return project.verifier().verify("web:" + site.url(""), adapter=adapter, only=only).model_dump(mode="json")
         finally:
             site.close()
     if clone == "android:kit":
@@ -259,9 +264,10 @@ def verify_kit(project, kit: Path, clone: str, adapter: dict | None = None) -> d
                 raise CloneError(f"install failed: {(cp.stdout + cp.stderr)[-600:]}")
         options = {k: v for k, v in project.state.target_options.items() if k != "activity"}
         adapter = {**(adapter or {}), "target_options": options}
-        return project.verifier().verify(f"android:{serial}:{package}", adapter=adapter).model_dump(mode="json")
+        verdict = project.verifier().verify(f"android:{serial}:{package}", adapter=adapter, only=only)
+        return verdict.model_dump(mode="json")
     if clone in ("cli:build:/kit", "cli:build:kit"):
-        return project.verifier().verify(f"cli:build:{kit}", adapter=adapter).model_dump(mode="json")
+        return project.verifier().verify(f"cli:build:{kit}", adapter=adapter, only=only).model_dump(mode="json")
     raise PermissionError(f"only clones built from the kit are accepted (web:kit, android:kit, cli:build:/kit), "
                           f"not {clone!r}")
 

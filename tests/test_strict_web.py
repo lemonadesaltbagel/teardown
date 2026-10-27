@@ -174,10 +174,17 @@ def test_strict_web_loop_one_developer(tmp_path, monkeypatch):
         assert json.loads(_cli("review", "--project", str(project_dir), "--feature", "quotes", "--json").stdout)[
             "coverage_unacknowledged"] == ["data state: list Quotes: one",
                                            "fault GET /quotes.json malformed"]
+        # the observer explains a gap; the person sees why next to it, and the unexplained one first
+        gap = "fault GET /quotes.json malformed"
+        uid = next(u.id for u in Project(project_dir).ledger.unknowns().values() if u.identity.question.endswith(gap))
+        observer("update_unknown", unknown_id=uid, status="out-of-scope", note="the page parses no body to break")
+        review = json.loads(_cli("review", "--project", str(project_dir), "--feature", "quotes", "--json").stdout)
+        assert review["coverage_explanations"] == {gap: "out-of-scope: the page parses no body to break"}
         code, out = _at_terminal("approve", "--project", str(project_dir), "--feature", "quotes", "--by",
                                  "dev@example.com", "--coverage", "--note",
                                  "one-quote and malformed states out of scope")
         assert code == 0, out
+        assert out.index("list Quotes: one  (no explanation)") < out.index("the page parses no body to break")
         final = json.loads(_cli("review", "--project", str(project_dir), "--feature", "quotes", "--json").stdout)
         assert final["unapproved"] == 0 and not final.get("coverage_unacknowledged")
 

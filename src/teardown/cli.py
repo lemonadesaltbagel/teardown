@@ -33,6 +33,8 @@ def main(argv: list[str] | None = None) -> int:
     rv.add_argument("--clone", required=True, help="e.g. cli:build:/kit")
     rv.add_argument("--max-failures", type=int, default=40)
     rv.add_argument("--adapter", type=Path, help="JSON adapter: {actions, rules} mapping your UI onto the spec")
+    rv.add_argument("--only-failed", action="store_true",
+                    help="re-run only the tests your build did not pass last time (fast); finish with a full run")
 
     gate = sub.add_parser("gate-serve", help="serve the verifier/spec/tickets over HTTP for the clean side")
     gate.add_argument("--project", required=True, type=Path)
@@ -140,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     vk.add_argument("--clone", required=True)
     vk.add_argument("--adapter", type=Path)
     vk.add_argument("--max-failures", type=int, default=40)
+    vk.add_argument("--only-failed", action="store_true", help="re-run only the tests the clone did not pass last time")
 
     rel = sub.add_parser("release", help="release a feature's current draft through the gate")
     rel.add_argument("--project", required=True, type=Path)
@@ -195,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
                                args.token or os.environ.get("TEARDOWN_GATE_TOKEN"))
         adapter = json.loads(args.adapter.read_text(encoding="utf-8")) if args.adapter else None
         try:
-            verdict = room.verify_against_original(args.clone, adapter)
+            verdict = room.verify_against_original(args.clone, adapter, "failed" if args.only_failed else None)
         except GateError as exc:  # a refusal, the clone's own build error, or an infrastructure failure
             print(str(exc), file=sys.stderr)
             return 1
@@ -330,7 +333,8 @@ def main(argv: list[str] | None = None) -> int:
         from teardown.project import Project
 
         adapter = json.loads(args.adapter.read_text(encoding="utf-8")) if args.adapter else None
-        verdict = verify_kit(Project(args.project), args.kit, args.clone, adapter)
+        verdict = verify_kit(Project(args.project), args.kit, args.clone, adapter,
+                             "failed" if args.only_failed else None)
         verdict["results"] = [r for r in verdict["results"] if r["status"] != "pass"][: args.max_failures]
         print(json.dumps(verdict, indent=1, ensure_ascii=False))
     elif args.command == "install-browser":
@@ -402,8 +406,10 @@ def _review(args) -> int:
         project.coverage(draft.feature, record_unknowns=False)
     gaps = project.coverage_gaps(draft.feature)  # rules-only drafts too: release checks them either way
     acknowledged = set((project.state.coverage_approvals.get(draft.feature) or {}).get("gaps", []))
+    explained = project.gap_explanations(draft.feature)
     summary.update(draft=draft_id, feature=draft.feature, coverage_gaps=gaps,
                    coverage_unacknowledged=[g for g in gaps if g not in acknowledged],
+                   coverage_explanations={g: explained[g] for g in gaps if g in explained},
                    prose=[{"id": f.id, "location": f.location, "matched": f.matched, "approved": bool(f.approval)}
                           for f in report.findings if f.cls == "prose"])
     if args.json:
@@ -419,10 +425,19 @@ def _review(args) -> int:
     for f in summary["prose"]:
         print(f"  prose {f['id']}{' (approved)' if f['approved'] else ''}  {f['location']}: {f['matched']}")
     if gaps:
-        print(f"coverage gaps: {len(gaps)}, unacknowledged: {len(summary['coverage_unacknowledged'])}")
-        for g in summary["coverage_unacknowledged"][:20]:
-            print(f"  - {g}")
+        print(f"coverage gaps: {len(gaps)}, unacknowledged: {len(summary['coverage_unacknowledged'])}, "
+              f"unexplained by the observer: {sum(g not in explained for g in gaps)}")
+        _print_gaps(summary["coverage_unacknowledged"], explained)
     return 0
+
+
+def _print_gaps(gaps: list[str], explained: dict[str, str], limit: int = 80) -> None:
+    """Unexplained gaps first: those are the ones to ask the observer about."""
+    ordered = sorted(gaps, key=lambda g: g in explained)
+    for g in ordered[:limit]:
+        print(f"  - {g}" + (f"\n      {explained[g]}" if g in explained else "  (no explanation)"))
+    if len(ordered) > limit:
+        print(f"  ... and {len(ordered) - limit} more (teardown review --json lists them all)")
 
 
 def _approve(args) -> int:
@@ -443,8 +458,7 @@ def _approve(args) -> int:
         feature = args.feature or project.workspace.get(draft_id, SpecDraft).feature
         gaps = project.coverage_gaps(feature)
         print(f"Acknowledge {len(gaps)} coverage gap(s) of {feature!r} (released as unknowns):")
-        for g in gaps[:30]:
-            print(f"  - {g}")
+        _print_gaps(gaps, project.gap_explanations(feature))
     else:
         if not args.reason:
             print("--reason is required for findings", file=sys.stderr)
@@ -484,12 +498,12 @@ def _local_room(project, kit: Path | None = None):
     command, a Python class) is refused."""
     from teardown.mcp.clean_server import CleanRoom
 
-    def verify(clone, adapter=None):
+    def verify(clone, adapter=None, only=None):
         if kit is not None:
             from teardown.cleanroom import verify_kit
 
-            return verify_kit(project, kit, clone, adapter)
-        return project.verifier().verify(clone, adapter=adapter).model_dump(mode="json")
+            return verify_kit(project, kit, clone, adapter, only)
+        return project.verifier().verify(clone, adapter=adapter, only=only).model_dump(mode="json")
 
     return CleanRoom(project.releases_dir, project.tickets_dir, verify)
 

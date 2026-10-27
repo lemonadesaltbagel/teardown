@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+- Results: a second round on Flipt with the tooling improved since the first (development set) scored 17/55 on
+  its own UI suite, up from 9/55.
+
+- The gate runs one verification at a time (a second call waits its turn), and a call the gate itself could
+  not finish (the original went away mid-episode) does not count against the budget. On Flipt, the
+  implementer's client gave up on a long first call and started a second one; both ran on the one original,
+  whose resets broke the other's episodes.
+
+- A `clear_storage` web action makes the visit a first one (cookies and web storage cleared, faults kept):
+  an app that remembers a session in web storage makes some calls only on a first visit, and `[fault,
+  clear_storage, reload]` now reaches them. `v10` with `mask_dates` masks dates and times in control names,
+  `properties` (keys and values), focus and flagged names too, so a switch labelled with the live clock or a
+  "Created 3 seconds ago" title stays stable. Coverage resolves gap unknowns for items that no longer exist (a
+  literal path before `api_templates` named it). The observer docs' examples no longer name a benchmark target's
+  own mode.
+
+- Server modes in coverage: each boolean field (outside lists) of a resource without path parameters, such as the
+  app's configuration, is a `mode GET <path> <field>` item, covered by a `patch` fault that sets it, and
+  `suggest_probes` gives that fault. `check_rules` lists `faults_not_met`, faults no call of the sequence matched
+  (they test nothing). `teardown review` and `teardown approve --coverage` show the observer's explanation next to
+  each gap, unexplained gaps first. `v10` with `mask_dates` also masks numeric dates (`10/26/2026`, not versions
+  like `1.6.10`) and times in table cells. Fixed: the calls a rule check made (kept for coverage) were released in
+  the spec and came back from the gate as prose findings.
+
+- Fault coverage credits every API call a rule's sequence made, at every step: an observation's `network` holds
+  only the calls since the previous step, so a fault met while a page loaded used to go uncredited. `v10` takes
+  `mask_patterns` (the observer's own regular expressions, masked everywhere text appears). Over MCP,
+  `check_rules` and `discover_ui` cap the budget an observer asks for below a 300-second client timeout.
+
+- A crashed Android emulator is restarted: the driver remembers its AVD (or takes
+  `target_options["emulator"]`), checks the device before every episode and brings it back on the same port. An
+  episode the device died in raises `DeviceLost` instead of reporting an empty screen, and verification re-runs
+  that episode once. In the second held-out Android round the emulator crashed during the implementer's first
+  verify, and every later call failed.
+
+- Faster verification on large targets: the original's runs are cached per release (each call re-checks a rotating
+  sample, and any difference drops the cache), so later calls run the clone alone; `verify --only-failed` re-runs
+  just the tests the build did not pass last time. On Flipt one full call took 45 minutes, two thirds of it
+  re-observing the unchanged original.
+
 - Results: a real open-source app, Flipt v1.61.0, scored 9/55 on its own UI suite; a second
   held-out Android app, Saltrake, 100/119 under the strict gate, built without verify feedback after the emulator
   crashed.

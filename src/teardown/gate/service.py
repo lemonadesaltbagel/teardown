@@ -67,7 +67,8 @@ def serve(room: CleanRoom, host: str = "127.0.0.1", port: int = 0, token: str | 
             try:
                 body = self._body()
                 if self.path == "/verify":
-                    return self._send(200, room.verify_against_original(body["clone"], body.get("adapter")))
+                    return self._send(200, room.verify_against_original(body["clone"], body.get("adapter"),
+                                                                        body.get("only")))
                 if self.path == "/tickets":
                     try:
                         return self._send(200, room.ask_question(body["question"]))
@@ -129,5 +130,7 @@ class RemoteCleanRoom:
     def get_ticket(self, ticket_id: str) -> dict[str, Any]:
         return self._call("GET", f"/tickets/{ticket_id}")
 
-    def verify_against_original(self, clone_target: str, adapter: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._call("POST", "/verify", {"clone": clone_target, "adapter": adapter})
+    def verify_against_original(self, clone_target: str, adapter: dict[str, Any] | None = None,
+                                only: str | None = None) -> dict[str, Any]:
+        return self._call("POST", "/verify", {"clone": clone_target, "adapter": adapter,
+                                               **({"only": only} if only else {})})

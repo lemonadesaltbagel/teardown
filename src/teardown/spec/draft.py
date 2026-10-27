@@ -110,7 +110,10 @@ class SpecDraft(ContentAddressed):
         if self.rules is not None:
             table = self.rules if isinstance(self.rules, dict) else self.rules.model_dump(mode="json")
             actions.update(table["actions"])
-            rule_records = [{k: r[k] for k in ("id", "statement", "origin", "kind", "status", "checks")}
+            # calls_a/calls_b only credit endpoint coverage; they are not part of what a rule asserts
+            rule_records = [{**{k: r[k] for k in ("id", "statement", "origin", "kind", "status")},
+                             "checks": [{k: v for k, v in c.items() if k not in ("calls_a", "calls_b")}
+                                        for c in r["checks"]]}
                             for r in table["rules"]]
         return {
             "feature": self.feature,

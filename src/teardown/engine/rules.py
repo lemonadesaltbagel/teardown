@@ -61,6 +61,10 @@ class CheckResult(BaseModel):
     observed_a: str
     observed_b: str | None = None
     holds: bool
+    # UI rules: every API call each side's sequence made, all steps included (an observation's `network` holds only
+    # the calls since the previous step, so a fault met while a page loaded is not in the last one)
+    calls_a: list[str] | None = None
+    calls_b: list[str] | None = None
 
 
 class RuleRecord(BaseModel):

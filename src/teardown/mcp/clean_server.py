@@ -10,6 +10,7 @@ filesystem path to dirty data at all. The tool surface stays the same.
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -32,6 +33,8 @@ class CleanRoom:
         self.releases_dir = Path(releases_dir)
         self.tickets_dir = Path(tickets_dir)
         self._verify = verify
+        # one verification at a time: the original is one shared instance, and every episode resets it
+        self._verifying = threading.Lock()
 
     def get_spec(self, release_id: str | None = None) -> dict[str, Any]:
         rel = load_release(self.releases_dir, release_id)
@@ -52,8 +55,12 @@ class CleanRoom:
         ticket = json.loads((self.tickets_dir / f"{ticket_id}.json").read_text(encoding="utf-8"))
         return {"ticket": ticket["id"], "status": ticket["status"], "answer": ticket.get("answer")}
 
-    def verify_against_original(self, clone_target: str, adapter: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self._verify(clone_target, adapter)
+    def verify_against_original(self, clone_target: str, adapter: dict[str, Any] | None = None,
+                                only: str | None = None) -> dict[str, Any]:
+        with self._verifying:  # a second call (say, after the first one's client gave up) waits its turn
+            if only is None:
+                return self._verify(clone_target, adapter)
+            return self._verify(clone_target, adapter, only=only)
 
 
 def build_clean_server(room: CleanRoom) -> MCPServer:
@@ -78,9 +85,11 @@ def build_clean_server(room: CleanRoom) -> MCPServer:
     @server.tool(
         description="Run the spec's conformance suite against your implementation and the original. Returns "
         "pass/fail/inconclusive per test with expected and observed abstract symbols only. For UI targets pass an "
-        "`adapter` {actions, rules} mapping your UI onto the spec's action names and output vocabulary."
+        "`adapter` {actions, rules} mapping your UI onto the spec's action names and output vocabulary. "
+        "only='failed' re-runs just the tests your build did not pass last time (fast; finish with a full run)."
     )
-    def verify_against_original(clone_target: str, adapter: dict[str, Any] | None = None) -> dict[str, Any]:
-        return room.verify_against_original(clone_target, adapter)
+    def verify_against_original(clone_target: str, adapter: dict[str, Any] | None = None,
+                                only: str | None = None) -> dict[str, Any]:
+        return room.verify_against_original(clone_target, adapter, only)
 
     return server

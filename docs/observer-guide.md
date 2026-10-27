@@ -110,7 +110,8 @@ p.api_contract()                                                       # value-f
 ```
 
 - Actions address elements by **ARIA role and accessible name** only.
-  - **Fields:** `op` is one of click, fill, check, uncheck, select, press, goto, back, forward, reload, fault.
+  - **Fields:** `op` is one of click, fill, check, uncheck, select, press, goto, back, forward, reload, fault,
+    clear_storage (a first-time visitor: cookies and web storage cleared; reload or goto afterwards).
     `value` holds the typed text, the selected option, the key, or (for `goto`) the root-relative URL.
   - **Same-named controls** (a page button and a dialog's confirm button): `within: {"role": "dialog",
     "name": ...}` scopes the lookup, and `nth` picks one among several matches.
@@ -201,9 +202,19 @@ p.api_contract()                                                       # value-f
   means "none": `{"controls": {}}` holds only when there are no controls, `{"alerts": []}` only when there is
   no alert.
 - **Server modes you cannot switch on**: `"mode": "patch"` passes the real JSON response with some fields
-  changed, `{"op": "fault", "fault": {"path": "/meta/info", "mode": "patch", "set": {"storage.readOnly":
+  changed, `{"op": "fault", "fault": {"path": "/api/settings", "mode": "patch", "set": {"site.maintenance":
   true}}}`, so a read-only, a maintenance or a feature-flagged mode the UI reads from the server becomes
-  observable. Use it for modes the server really has (the UI's own tests often mock them this way).
+  observable. Use it for modes the server really has. Coverage lists one `mode GET <path> <field>` item for
+  each boolean field (outside lists) of a resource without path parameters, such as the app's configuration
+  or the signed-in user, and `suggest_probes` gives the patch fault for it. Many APIs leave a false flag out of the
+  response altogether, so a mode can be missing from what you observed: look for the server's documented
+  configuration (a maintenance mode, sign-ups closed, authentication off) and add it to the inventory yourself.
+- **A fault that met no call tests nothing**: `check_rules` lists such faults under `faults_not_met`. A call made
+  only on one page (the token list, the settings) needs the fault first and then that page, not a reload of
+  the start page. A call made only on a first visit (the app remembers a session in web storage) needs
+  `[fault, clear_storage, reload]`.
+- **A name that changes on its own** (a switch labelled with the live clock): address it with `"name_regex":
+  true` and a pattern for its stable part (`"name": "^UTC Timezone"`), and mask the clock with `mask_dates`.
 - **Pending states**: `"mode": "hang"` holds matching calls unanswered, so the next observation shows the loading
   UI (placeholders, disabled buttons). A later `{"op": "fault", "fault": {"mode": "release", "then":
   "continue|abort|timeout|status", "status": 500}}` answers them and removes the hang.
@@ -225,6 +236,9 @@ p.api_contract()                                                       # value-f
   `compile_spec` records an unknown if expected text contains dates while they are not masked. Under `v10` this
   also masks times of day (`<time>`) and relative times ("3 seconds ago", "just now": `<ago>`), in control names,
   options and the outline too.
+- **Masking your own patterns** (one-time tokens, ids or dates the built-in masking does not know): `v10` takes
+  `set_mapper(params={"mask_patterns": [regex, ...]})`. Matching text becomes `<masked>` in headings, text,
+  alerts, status messages, control names, options, the outline, table cells and field values.
 - **Mapper rules** (`set_mapper(rules=[...])`), applied to the raw observation before the abstraction: each is
   `{"path": "dotted.key.path" ('*' for any key), "op": "drop" | "mask" | "rename" | "classify", "value": ...,
   "classes": [[regex, class], ...], "default": ...}`. Prefer the built-in `params` (`mask_dates`); a rule is for
@@ -252,6 +266,10 @@ p.probe_web_field("calc", prefix=[...], role="textbox", name="Amount", submit="g
 - **Episodes.** Every episode starts from cleared app data and a cold launch. Steps address elements by
   accessibility role and name: the text, or the content description for fields and icon buttons.
 - **Actions.** `click`, `fill`, `longclick`, `key` (a keycode), `back`, `network` (`off` | `on`).
+- **A crashed emulator is restarted.** The driver remembers the emulator's AVD when it first configures it (or
+  takes `target_options={"emulator": {"avd": "...", "args": [...]}}`), checks the device before every episode,
+  and brings it back on the same port if it died. An episode the device died in raises `DeviceLost` rather than
+  passing an empty screen off as the app's behavior, and verification runs that episode once more.
 - **Symbols** (`android.a11y/v3`, the default for new projects):
   - `controls`: role:name → flags, i.e. `disabled`, `checked`, `selected`, `focused`, and `filled` | `empty` for
     text fields;

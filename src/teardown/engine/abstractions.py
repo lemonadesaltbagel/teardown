@@ -158,6 +158,10 @@ _TABLE_ROLES = {"cell", "gridcell", "rowheader", "columnheader"}
 # v10 with mask_dates: times of day ("UTC Timezone (14:03:27)" would otherwise be a new control every second) and
 # relative times ("3 seconds ago", "just now", "in 5 minutes")
 TIME_OF_DAY = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AaPp][Mm])?\b")
+# and numeric dates ("10/26/2026", "26.10.2026"; not versions like "1.6.10"). Older versions keep their symbols,
+# so only v10 masks these.
+NUMERIC_DATE = re.compile(r"(?<![\d./])(?:\d{1,2}/\d{1,2}/(?:\d{4}|\d{2})|\d{1,2}\.\d{1,2}\.\d{4})"
+                          r"(?![\d./]*\d)")
 RELATIVE_TIME = re.compile(r"\b(?:(?:\d+|an?|a few)\s+(?:second|minute|hour|day|week|month|year)s?\s+ago|just now|"
                            r"in\s+(?:\d+|an?|a few)\s+(?:second|minute|hour|day|week|month|year)s?)\b", re.IGNORECASE)
 
@@ -304,9 +308,15 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
                 out.setdefault("flagged", []).append(marked)
     if version >= 10 and observation.get("fragment", "").startswith(("/", "!/")):  # a hash route is the route
         out["path"] = f"{out['path']}#{observation['fragment']}"
-    if params.get("mask_dates") and version >= 10:
+    patterns = [re.compile(p) for p in params.get("mask_patterns") or []] if version >= 10 else []
+    if version >= 10 and (params.get("mask_dates") or patterns):
         def clock(t: str) -> str:
-            return RELATIVE_TIME.sub("<ago>", TIME_OF_DAY.sub("<time>", t))
+            if params.get("mask_dates"):  # dates first: an ISO timestamp is one date, not a date and a time
+                t = NUMERIC_DATE.sub("<date>", CALENDAR_DATE.sub("<date>", t))
+                t = RELATIVE_TIME.sub("<ago>", TIME_OF_DAY.sub("<time>", t))
+            for pattern in patterns:  # the observer's own (a one-time token, an id shown in text)
+                t = pattern.sub("<masked>", t)
+            return t
 
         out["controls"] = {clock(k): v for k, v in out["controls"].items()}
         for key in ("headings", "alerts", "text", "status", "outline"):
@@ -316,23 +326,36 @@ def web_aria(observation: Any, params: dict[str, Any], version: int = 1) -> Any:
             out["options"] = {clock(k): [clock(o) for o in v] for k, v in out["options"].items()}
         if "landmarks" in out:
             out["landmarks"] = {k: clock(v) for k, v in out["landmarks"].items()}
+        for data in out.get("tables", {}).values():
+            data["rows"] = [[clock(c) for c in row] for row in data["rows"]]
+        if "properties" in out:  # keyed by control name; a title or value can carry the clock too
+            out["properties"] = {clock(k): {p: clock(v) if isinstance(v, str) else v for p, v in props.items()}
+                                 for k, props in out["properties"].items()}
+        if isinstance(out.get("focus"), str):
+            out["focus"] = clock(out["focus"])
+        if "flagged" in out:
+            out["flagged"] = [clock(t) for t in out["flagged"]]
     if params.get("mask_dates"):
+        def date(t: str) -> str:
+            t = CALENDAR_DATE.sub("<date>", t)
+            return NUMERIC_DATE.sub("<date>", t) if version >= 10 else t
+
         for key in ("headings", "alerts", "text", "status"):
             if key in out:
-                out[key] = [CALENDAR_DATE.sub("<date>", t) for t in out[key]]
+                out[key] = [date(t) for t in out[key]]
         for data in out.get("tables", {}).values():
-            data["rows"] = [[CALENDAR_DATE.sub("<date>", c) for c in row] for row in data["rows"]]
+            data["rows"] = [[date(c) for c in row] for row in data["rows"]]
             if "row_headers" in data:
-                data["row_headers"] = [CALENDAR_DATE.sub("<date>", c) for c in data["row_headers"]]
+                data["row_headers"] = [date(c) for c in data["row_headers"]]
         if "definitions" in out:
-            out["definitions"] = [[t, CALENDAR_DATE.sub("<date>", d)] for t, d in out["definitions"]]
+            out["definitions"] = [[t, date(d)] for t, d in out["definitions"]]
         if "landmarks" in out:
-            out["landmarks"] = {k: CALENDAR_DATE.sub("<date>", v) for k, v in out["landmarks"].items()}
+            out["landmarks"] = {k: date(v) for k, v in out["landmarks"].items()}
         if "outline" in out:
-            out["outline"] = [CALENDAR_DATE.sub("<date>", line) for line in out["outline"]]
+            out["outline"] = [date(line) for line in out["outline"]]
         for props in out.get("properties", {}).values():
             if isinstance(props.get("value"), str):
-                props["value"] = CALENDAR_DATE.sub("<date>", props["value"])
+                props["value"] = date(props["value"])
     for key in ("alerts", "text"):
         if not out[key]:
             out.pop(key)

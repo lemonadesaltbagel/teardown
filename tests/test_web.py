@@ -321,6 +321,17 @@ def test_coverage_lists_every_observed_endpoint_by_fault_class(site, tmp_path):
     # 'broken' is used, but no call to /quotes.json was observed while it was active: no credit
     assert faults == {"fault GET /quotes.json 5xx": 0, "fault GET /quotes.json network": 1,
                       "fault GET /quotes.json malformed": 0}
+    project.coverage("quotes")  # the gaps become unknowns; naming the path anew leaves those items behind
+
+    def open_gaps():
+        return sorted(u.identity.question.rsplit(": ", 1)[1] for u in project.ledger.unknowns().values()
+                      if u.status == "open" and "fault GET" in u.identity.question)
+
+    assert open_gaps() == ["fault GET /quotes.json 5xx", "fault GET /quotes.json malformed"]
+    project.open_target("web:" + site.url("fetcher.html"), purpose="research",
+                        target_options={"api_templates": ["/{file}"]})
+    project.coverage("quotes")
+    assert open_gaps() == ["fault GET /{file} 5xx", "fault GET /{file} malformed"]
     with pytest.raises(ValueError, match="define_actions"):
         project.check_rules("quotes", [{"statement": "x", "checks": [
             {"kind": "outcome", "a": {"actions": [{"op": "click", "role": "button", "name": "Load quotes"}]},
@@ -1001,5 +1012,141 @@ def test_a_patch_fault_changes_fields_of_the_real_response(tmp_path):
         assert "Read-only" not in " ".join(normal.get("text", [])) and normal["controls"]["button:New Flag"] == []
         assert "Read-only database 1" in patched["text"]  # the other fields are the real ones
         assert patched["controls"]["button:New Flag"] == ["disabled"]
+    finally:
+        local.close()
+
+
+def test_a_fault_met_while_the_page_loaded_counts_for_coverage(tmp_path):
+    root = tmp_path / "site"
+    root.mkdir()
+    (root / "data.json").write_text('{"items": ["a"]}')
+    (root / "home.html").write_text(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>H</title></head><body><main>'
+        '<p id="out">Loading</p><button>Details</button><script>fetch("data.json").then(r=>r.json())'
+        '.then(d=>{document.getElementById("out").textContent=d.items.length+" items";})'
+        '.catch(()=>{document.getElementById("out").textContent="Offline";});</script></main></body></html>')
+    local = LocalSite(root)
+    try:
+        project = Project(tmp_path / "p")
+        project.open_target("web:" + local.url("home.html"), purpose="research")
+        project.define_actions({"offline": {"op": "fault", "fault": {"path": "/data.json", "mode": "abort"}},
+                                "home": {"op": "goto", "value": "home.html"},
+                                "details": {"op": "click", "role": "button", "name": "Details"}})
+        project.define_actions({"other_down": {"op": "fault", "fault": {"path": "/other.json", "mode": "abort"}}})
+        out = project.check_rules("home", [{"statement": "Offline, the page says so.", "checks": [
+            {"kind": "outcome", "a": {"actions": ["offline", "home", "details"]}, "expect": {"text": ["Offline"]},
+             "keys": ["text"]}]}, {"statement": "A fault on a call the page never makes.", "checks": [
+            {"kind": "outcome", "a": {"actions": ["other_down", "home"]}, "expect": {"text": ["1 items"]},
+             "keys": ["text"]}]}], workers=1)
+        assert "faults_not_met" not in out["rules"][0] and out["rules"][1]["faults_not_met"] == ["other_down"]
+        counts = project.coverage("home", record_unknowns=False)["counts"]
+        assert counts["fault GET /data.json network"] == 1  # the call was made while the page loaded, not at the end
+        draft = project.compile_spec("home")  # the recorded calls credit coverage only: not part of the spec
+        assert "calls_a" not in json.dumps(draft.release_projection())
+        assert not [f for f in project.review_spec(draft.id)[1].findings if "calls_" in f.location]
+    finally:
+        local.close()
+
+
+def test_v10_masks_the_observers_own_patterns():
+    from teardown.engine.abstractions import BUILTINS
+
+    def page(token, created):
+        aria = f'- paragraph: Your token is {token}\n- table "Flags":\n  - row:\n    - cell "a"\n    - cell "{created}"'
+        return {"aria": aria, "path": "/"}
+
+    params = {"mask_patterns": [r"\bflipt_[A-Za-z0-9]{8}\b", r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}"]}
+    v10 = BUILTINS["web.aria/v10"]
+    a = v10(page("flipt_Ab12Cd34", "2026-10-26 11:02"), params)
+    b = v10(page("flipt_Zz99Yy88", "2026-10-27 09:15"), params)
+    assert a == b and "Your token is <masked>" in a["text"] and a["tables"]["Flags"]["rows"] == [["a", "<masked>"]]
+
+
+def test_v10_masks_numeric_dates_and_older_versions_keep_them():
+    from teardown.engine.abstractions import BUILTINS
+
+    def page(created):
+        return {"aria": f'- table "Tokens":\n  - row:\n    - cell "ci"\n    - cell "{created}"', "path": "/"}
+
+    a, b = page("10/26/2026, 11:02:03 AM"), page("1/3/2027, 9:15:00 PM")
+    v10, v9 = BUILTINS["web.aria/v10"], BUILTINS["web.aria/v9"]
+    assert v10(a, {"mask_dates": True}) == v10(b, {"mask_dates": True})
+    assert v10(a, {"mask_dates": True})["tables"]["Tokens"]["rows"][0][1].startswith("<date>")
+    assert v9(a, {"mask_dates": True}) != v9(b, {"mask_dates": True})
+    assert v10(page("version 1.6.10"), {"mask_dates": True}) == v10(page("version 1.6.10"), {})
+
+
+def test_boolean_fields_of_singleton_responses_are_modes_to_cover_with_a_patch(tmp_path):
+    root = tmp_path / "site"
+    root.mkdir()
+    (root / "config.json").write_text('{"readOnly": false, "ui": {"beta": true}, "users": [{"admin": true}]}')
+    (root / "home.html").write_text(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>H</title></head><body><main>'
+        '<p id="out">Loading</p><script>fetch("config.json").then(r=>r.json()).then(c=>{'
+        'document.getElementById("out").textContent=c.readOnly?"Read only":"Editable";});</script>'
+        '</main></body></html>')
+    local = LocalSite(root)
+    try:
+        project = Project(tmp_path / "p")
+        project.open_target("web:" + local.url("home.html"), purpose="research")
+        project.define_actions({"home": {"op": "goto", "value": "home.html"}})
+        project.check_rules("home", [{"statement": "Editable by default.", "checks": [
+            {"kind": "outcome", "a": {"actions": ["home"]}, "expect": {"text": ["Editable"]}, "keys": ["text"]}]}],
+            workers=1)
+        report = project.coverage("home", record_unknowns=False)
+        modes = {k: v for k, v in report["counts"].items() if k.startswith("mode ")}
+        assert modes == {"mode GET /config.json readOnly": 0, "mode GET /config.json ui.beta": 0}
+        suggestion = next(s for s in project.suggest_probes("home") if s["item"] == "mode GET /config.json readOnly")
+        project.define_actions({"read_only": suggestion["action"]})
+        project.check_rules("home", [{"statement": "Read-only storage disables editing.", "checks": [
+            {"kind": "outcome", "a": {"actions": ["read_only", "home"]}, "expect": {"text": ["Read only"]},
+             "keys": ["text"]}]}], workers=1)
+        assert project.coverage("home", record_unknowns=False)["counts"]["mode GET /config.json readOnly"] == 1
+    finally:
+        local.close()
+
+
+def test_v10_masks_dates_in_control_names_and_properties():
+    from teardown.engine.abstractions import BUILTINS
+
+    def at(stamp, ago):
+        return {"aria": f'- switch "UTC Timezone Display dates in UTC {stamp}"\n- button "Save"', "path": "/",
+                "properties": {f"time:Created {ago}": {"title": stamp}, "button:Save": {"description": "x"}},
+                "focus_named": f"switch:UTC Timezone Display dates in UTC {stamp}"}
+
+    v10 = BUILTINS["web.aria/v10"]
+    a = v10(at("2026-10-27 03:41:54", "3 seconds ago"), {"mask_dates": True})
+    b = v10(at("2026-10-28 11:02:03", "a minute ago"), {"mask_dates": True})
+    assert a == b and "switch:UTC Timezone Display dates in UTC <date>" in a["controls"]
+    assert a["properties"]["time:Created <ago>"] == {"title": "<date>"}
+
+
+def test_clear_storage_replays_a_first_visit_so_a_fault_meets_its_call(tmp_path):
+    root = tmp_path / "site"
+    root.mkdir()
+    (root / "self.json").write_text('{"name": "guest"}')
+    (root / "home.html").write_text(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>H</title></head><body><main>'
+        '<p id="out">Welcome back</p><script>if (!localStorage.getItem("session")) {'
+        'fetch("self.json").then(r=>r.json()).then(d=>{localStorage.setItem("session", d.name);'
+        'document.getElementById("out").textContent="Hello "+d.name;})'
+        '.catch(()=>{document.getElementById("out").textContent="Sign-in check failed";});}</script>'
+        '</main></body></html>')
+    local = LocalSite(root)
+    try:
+        project = Project(tmp_path / "p")
+        project.open_target("web:" + local.url("home.html"), purpose="research")
+        project.define_actions({"self_down": {"op": "fault", "fault": {"path": "/self.json", "mode": "abort"}},
+                                "reload": {"op": "reload"}, "forget": {"op": "clear_storage"}})
+        out = project.check_rules("home", [
+            {"statement": "A returning visitor is welcomed back.", "checks": [
+                {"kind": "outcome", "a": {"actions": ["self_down", "reload"]}, "expect": {"text": ["Welcome back"]},
+                 "keys": ["text"]}]},
+            {"statement": "On a first visit a failed sign-in check is reported.", "checks": [
+                {"kind": "outcome", "a": {"actions": ["self_down", "forget", "reload"]},
+                 "expect": {"text": ["Sign-in check failed"]}, "keys": ["text"]}]}], workers=1)
+        assert out["rules"][0]["faults_not_met"] == ["self_down"] and "faults_not_met" not in out["rules"][1]
+        assert [r["status"] for r in out["rules"]] == ["corroborated", "corroborated"]
+        assert project.coverage("home", record_unknowns=False)["counts"]["fault GET /self.json network"] == 1
     finally:
         local.close()

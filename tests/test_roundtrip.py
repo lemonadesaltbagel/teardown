@@ -107,3 +107,79 @@ def test_gate_service_serves_spec_verdicts_and_tickets_over_http(demo):
         assert err.value.code == 401
     finally:
         server.shutdown()
+
+
+def test_verify_caches_the_original_and_can_rerun_only_what_failed(tmp_path):
+    """On a large target a verify call took 45 minutes, two thirds of it re-observing the unchanged original."""
+    result = run_demo(tmp_path / "d", log=lambda *_: None)
+    project: Project = result["project"]
+    verifier = project.verifier()
+    opened = verifier.open_original
+    runs = {"n": 0}
+
+    def counting(rel):
+        session = opened(rel)
+        real = session.run
+
+        def run(*a, **k):
+            runs["n"] += 1
+            return real(*a, **k)
+
+        session.run = run
+        return session
+
+    verifier.open_original = counting
+    bad = "fake:py:teardown.examples.signup_clone:BuggySignup"
+    first = verifier.verify(bad)  # the demo already filled the cache for this release: only the sample re-runs
+    assert runs["n"] < first.passed + first.failed + first.inconclusive
+    again = verifier.verify(bad, only="failed")
+    assert again.passed + again.failed + again.inconclusive == first.failed + first.inconclusive
+    assert again.failed == first.failed
+    import json as _json
+
+    cache_file = next((project.releases_dir / "verify-cache").glob("*.json"))
+    stale = {k: "stale" for k in _json.loads(cache_file.read_text())}  # the original changed since it was cached
+    cache_file.write_text(_json.dumps(stale))
+    runs["n"] = 0
+    fresh = verifier.verify(bad)
+    assert runs["n"] >= fresh.passed + fresh.failed + fresh.inconclusive  # the sample caught it: all re-run
+    assert (fresh.passed, fresh.failed) == (first.passed, first.failed)
+
+
+def test_a_gate_failure_does_not_spend_a_verify_call_and_calls_take_turns(tmp_path):
+    """On Flipt the implementer's client gave up on a long first call and started a second one; both ran at once
+    on the one original, whose resets broke the other's episodes, and the failed call still counted."""
+    import json as _json
+    import threading
+    import time
+
+    result = run_demo(tmp_path / "d", log=lambda *_: None)
+    project: Project = result["project"]
+    verifier = project.verifier()
+    budget = project.releases_dir / "verify-budget.json"
+    before = _json.loads(budget.read_text())
+
+    def broken(rel):
+        raise RuntimeError("net::ERR_EMPTY_RESPONSE")  # the original's server went away mid-episode
+
+    verifier.open_original = broken
+    with pytest.raises(RuntimeError):
+        verifier.verify("fake:py:teardown.examples.signup_clone:BuggySignup")
+    assert _json.loads(budget.read_text()) == before
+
+    running, most = [0], [0]
+
+    def slow(clone, adapter):
+        running[0] += 1
+        most[0] = max(most[0], running[0])
+        time.sleep(0.2)
+        running[0] -= 1
+        return {"passed": 1}
+
+    room = CleanRoom(project.releases_dir, tmp_path / "tickets", slow)
+    threads = [threading.Thread(target=room.verify_against_original, args=("web:x",)) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert most[0] == 1

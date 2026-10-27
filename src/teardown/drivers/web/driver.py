@@ -38,7 +38,7 @@ class WebAction(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     op: Literal["click", "fill", "check", "uncheck", "select", "press", "goto", "fault", "back", "forward",
-                "reload"]
+                "reload", "clear_storage"]
     role: str | None = None
     name: str | None = None
     name_regex: bool = False
@@ -53,7 +53,7 @@ class WebAction(BaseModel):
                                   "mode: status|abort|timeout|malformed|hang|patch, "
                                   "status: int, method: optional}. Applies to the rest of the episode. 'patch' "
                                   "passes the real JSON response with fields changed: {mode: patch, set: "
-                                  "{'storage.readOnly': true}} (a mode the server can be in). 'hang' holds "
+                                  "{'site.maintenance': true}} (a mode the server can be in). 'hang' holds "
                                   "matching requests pending (loading states become observable) until a later "
                                   "{mode: release, then: continue|abort|timeout|status, status: int}. "
                                   "{mode: clear} removes every fault installed so far in the episode.")
@@ -562,6 +562,10 @@ class WebDriver(Driver):
             return "ok"
         if a.op == "goto":  # relative paths resolve against the target's root, so specs stay portable to clones
             page.goto(urljoin(self.url, a.value or ""), wait_until="load")
+            return "ok"
+        if a.op == "clear_storage":  # a first-time visitor: no cookies or web storage (faults stay installed)
+            self._ctx.clear_cookies()
+            page.evaluate("() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} }")
             return "ok"
         if a.op in ("back", "forward", "reload"):  # browser history and reload, as the user does them
             getattr(page, {"back": "go_back", "forward": "go_forward", "reload": "reload"}[a.op])(wait_until="load")
