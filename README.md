@@ -54,13 +54,13 @@ through the gate and is recorded in a signed, hash-chained audit log.
 ### Install
 
 ```bash
-uv tool install "teardown[web] @ git+https://github.com/lemonadesaltbagel/teardown"   # Python 3.12+
+uv tool install "teardown-cleanroom[web] @ git+https://github.com/lemonadesaltbagel/teardown"   # Python 3.12+
 teardown install-browser                   # Chromium for web targets
 teardown demo                              # observe -> gate -> clean -> verdict on a built-in example
 ```
 
-`pip install "teardown[web] @ git+https://github.com/lemonadesaltbagel/teardown"` works too. Once a release is on
-PyPI, the package is just `teardown[web]`. Docker is needed for CLI targets (each run is isolated in a container)
+`pip install "teardown-cleanroom[web] @ git+https://github.com/lemonadesaltbagel/teardown"` works too. Once a
+release is on PyPI, the package is just `teardown-cleanroom[web]`; the command it installs is `teardown`. Docker is needed for CLI targets (each run is isolated in a container)
 and for the enforced rooms; an installed copy builds the room images from files it carries. Android needs the SDK
 and an emulator or device reachable through `adb`.
 

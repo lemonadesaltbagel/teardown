@@ -866,7 +866,7 @@ wheels = [
 ]
 
 [[package]]
-name = "teardown"
+name = "teardown-cleanroom"
 version = "0.3.0"
 source = { editable = "." }
 dependencies = [

@@ -16,7 +16,8 @@ Highlights:
   Android emulator is restarted.
 - **A clearer strict gate.** Coverage lists server modes and faults that met no call, the reviewer sees the
   observer's explanation next to each gap, and the clean side sees the gate's own error messages.
-- **Installable on its own**, with `install-browser`, `install-android-agent`, room images built from the files
+- **Installable on its own** as `teardown-cleanroom` (the name "teardown" is not available on PyPI; the command
+  and the import package stay `teardown`), with `install-browser`, `install-android-agent`, room images built from the files
   the wheel carries, `teardown api-proxy` for backends that share the UI's port, and a release workflow for
   PyPI.
 

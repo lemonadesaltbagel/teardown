@@ -1,5 +1,5 @@
 [project]
-name = "teardown"
+name = "teardown-cleanroom"
 version = "0.3.0"
 description = "Clean-room, behavior-first analysis of applications: observe black-box, mine falsifiable behavior claims, release a sanitized spec, and differential-test a clean reimplementation."
 readme = "README.md"

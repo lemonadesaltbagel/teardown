@@ -13,6 +13,7 @@ import shutil
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+DIST = "teardown-cleanroom"  # the distribution on PyPI (the import package and the command are `teardown`)
 PACKAGE = Path(__file__).resolve().parent
 CHECKOUT = PACKAGE.parents[1]
 
@@ -34,7 +35,7 @@ def room_root() -> Path:
     if in_checkout():
         return CHECKOUT
     try:
-        current = version("teardown")
+        current = version(DIST)
     except PackageNotFoundError:  # pragma: no cover - an unpackaged, non-checkout copy
         current = "local"
     root = state_dir() / "room" / current

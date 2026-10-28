@@ -1,6 +1,6 @@
 name: release
 # Publishes to PyPI when a version tag (v1.2.3) is pushed. It uses PyPI trusted publishing: no token is stored.
-# One-time setup on pypi.org: add a (pending) trusted publisher for project "teardown" with owner
+# One-time setup on pypi.org: add a (pending) trusted publisher for project "teardown-cleanroom" with owner
 # "lemonadesaltbagel", repository "teardown", workflow "release.yml" and environment "pypi".
 on:
   push:

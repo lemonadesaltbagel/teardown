@@ -355,7 +355,7 @@ def main(argv: list[str] | None = None) -> int:
         import subprocess
 
         if importlib.util.find_spec("playwright") is None:
-            print('web targets need the web extra: pip install "teardown[web]"', file=sys.stderr)
+            print('web targets need the web extra: pip install "teardown-cleanroom[web]"', file=sys.stderr)
             return 2
         # the interpreter Teardown runs in, so the browser matches its Playwright (uv tool installs, venvs, pipx)
         return subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"]).returncode
@@ -396,8 +396,10 @@ def main(argv: list[str] | None = None) -> int:
 def _version() -> str:
     from importlib.metadata import PackageNotFoundError, version
 
+    from teardown.resources import DIST
+
     try:
-        return version("teardown")
+        return version(DIST)
     except PackageNotFoundError:
         return "unknown"
 
