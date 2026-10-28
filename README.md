@@ -9,17 +9,17 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776ab?style=flat-square&logo=python&logoColor=white)](pyproject.toml)
 [![MCP servers](https://img.shields.io/badge/MCP-observe_%C2%B7_clean-5c4ee5?style=flat-square)](#how-teardown-works)
 [![Targets](https://img.shields.io/badge/targets-CLI_%C2%B7_web_%C2%B7_Android-0f766e?style=flat-square)](#what-you-can-analyze)
-[![Release 0.2.0](https://img.shields.io/badge/release-0.2.0-f59e0b?style=flat-square)](CHANGELOG.md)
+[![PyPI](https://img.shields.io/pypi/v/teardown-cleanroom?style=flat-square&color=f59e0b)](https://pypi.org/project/teardown-cleanroom/)
 [![Apache-2.0 license](https://img.shields.io/badge/license-Apache--2.0-d22128?style=flat-square)](LICENSE)
 
 [Quick start](#quick-start) · [How Teardown works](#how-teardown-works) · [What you can analyze](#what-you-can-analyze) · [Results](#results) · [FAQ](#faq) · [Documentation](#documentation)
 
-<code>uv run teardown demo</code>
+<code>uv tool install "teardown-cleanroom[web]" && teardown demo</code>
 
 </div>
 
 > [!IMPORTANT]
-> Teardown is early software (0.2). You declare the purpose of every analysis at intake and own its legal
+> Teardown is early software (0.3). You declare the purpose of every analysis at intake and own its legal
 > assessment. Read [Responsible use](#responsible-use) first.
 
 <div align="center">
@@ -54,13 +54,14 @@ through the gate and is recorded in a signed, hash-chained audit log.
 ### Install
 
 ```bash
-uv tool install "teardown-cleanroom[web] @ git+https://github.com/lemonadesaltbagel/teardown"   # Python 3.12+
+uv tool install "teardown-cleanroom[web]"   # Python 3.12+; the command is `teardown`
 teardown install-browser                   # Chromium for web targets
 teardown demo                              # observe -> gate -> clean -> verdict on a built-in example
 ```
 
-`pip install "teardown-cleanroom[web] @ git+https://github.com/lemonadesaltbagel/teardown"` works too. Once a
-release is on PyPI, the package is just `teardown-cleanroom[web]`; the command it installs is `teardown`. Docker is needed for CLI targets (each run is isolated in a container)
+`pip install "teardown-cleanroom[web]"` works too, and
+`uv tool install "teardown-cleanroom[web] @ git+https://github.com/lemonadesaltbagel/teardown"` installs the
+latest unreleased version. Docker is needed for CLI targets (each run is isolated in a container)
 and for the enforced rooms; an installed copy builds the room images from files it carries. Android needs the SDK
 and an emulator or device reachable through `adb`.
 
