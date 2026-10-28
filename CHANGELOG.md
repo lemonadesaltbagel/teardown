@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 0.3.0 (2026-10-28)
+
+Highlights:
+
+- **Real applications.** Observation holds up on an app many times larger than the benchmark ones (Flipt):
+  long calls have time budgets and progress, faults can change a response (`patch`, for server modes), a
+  `request` action seeds records so deep screens are reachable, hash routes and clocks are handled
+  (`web.aria/v10`), and settling no longer misses short-lived notifications. Results: 9 → 19 of 55 on Flipt's own
+  suite over four rounds (development set).
+- **Faster, sturdier verification.** The original's runs are cached per release, `verify --only-failed` re-runs
+  only what failed, one verification runs at a time, and a call the gate fails does not spend budget. A crashed
+  Android emulator is restarted.
+- **A clearer strict gate.** Coverage lists server modes and faults that met no call, the reviewer sees the
+  observer's explanation next to each gap, and the clean side sees the gate's own error messages.
+- **Installable on its own**, with `install-browser`, `install-android-agent`, room images built from the files
+  the wheel carries, `teardown api-proxy` for backends that share the UI's port, and a release workflow for
+  PyPI.
+
+Details:
+
+- `teardown api-proxy` puts an API-only front before a target that serves its UI and API on one port, so the
+  clean side can call the backend without being able to fetch the original's frontend. `cleanroom check` says
+  so when the kit's API points at the original's port.
+
 - A web name pattern drops Python-only leading flags such as `(?i)` (patterns run as JavaScript and already
   ignore case), and other Python-only syntax is refused when the action is defined instead of crashing an
   episode. `compile_spec` judges the coverage gaps as they are now.

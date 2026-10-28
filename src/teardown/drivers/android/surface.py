@@ -67,6 +67,16 @@ def build_app() -> Path:
     return apk
 
 
+def _wait_for_keyboard(adb: str, serial: str, timeout_s: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        state = subprocess.run([adb, "-s", serial, "shell", "dumpsys", "input_method"], capture_output=True,
+                               text=True, timeout=30).stdout
+        if "mInputShown=true" in state:
+            return
+        time.sleep(0.2)
+
+
 def audit(versions: list[str], *, serial: str = "emulator-5554") -> dict[str, dict[str, bool]]:
     """{case id: {version: the two sides give different symbols}}. Every CASES entry should differ and every
     SAME entry should not."""
@@ -86,6 +96,8 @@ def audit(versions: list[str], *, serial: str = "emulator-5554") -> dict[str, di
                 subprocess.run([adb, "-s", serial, "shell", "am", "start", "-W", "-n", f"{PACKAGE}/.Main",
                                 "--es", "case", case.id, "--es", "side", side], capture_output=True, timeout=60)
                 time.sleep(0.3)  # then the screen as it settles (dialogs and error popups arrive a moment later)
+                if case.id == "keyboard" and side == "a":
+                    _wait_for_keyboard(adb, serial)  # the soft keyboard comes up a moment after the focus does
                 observations[f"{case.id}.{side}"] = driver._wait_settled()
     finally:
         driver.close()

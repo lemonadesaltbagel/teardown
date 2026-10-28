@@ -179,7 +179,12 @@ for host, port in [("1.1.1.1", 443)] + [("host.docker.internal", p) for p in TAR
         out(f"no direct route to {host}:{port}", True, e)
 for host, port in [("example.com", 443)] + [("host.docker.internal", p) for p in TARGET_PORTS]:
     line = connect_via_proxy(host, port)
-    out(f"egress refuses {host}:{port}", " 403 " in line + " ", line)
+    refused = " 403 " in line + " "
+    out(f"egress refuses {host}:{port}", refused, line)
+    if not refused and host != "example.com":
+        print(f"     the original's port {port} is reachable: the kit's --api points at it. If the original serves "
+              "its UI and API on one port, run `teardown api-proxy --listen <port> --backend <original> --allow "
+              "/api ...` and give that port as --api")
 if MODEL_API:
     line = connect_via_proxy("api.anthropic.com", 443)
     out("egress allows the model API", " 200 " in line + " ", line)

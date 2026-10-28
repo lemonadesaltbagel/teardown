@@ -72,8 +72,10 @@ To work on Teardown itself, use a checkout: `git clone https://github.com/lemona
 Register the observe server with your agent (Claude Code shown; any MCP client works):
 
 ```bash
-claude mcp add teardown-observe -- uv run --directory /path/to/teardown teardown observe --project /path/to/project
+claude mcp add teardown-observe -- teardown observe --project /path/to/project
 ```
+
+From a checkout, use `uv run --directory /path/to/teardown teardown observe ...` instead.
 
 Then ask:
 
@@ -116,7 +118,7 @@ teardown cleanroom down  --project P
 
 1. **Observe.** Drivers run the target and capture behavior only: outputs and file effects for CLIs,
    accessibility trees and API exchanges for web apps, accessibility trees for Android. A *mapper* turns each
-   observation into a compact, wording-agnostic symbol. For web apps that symbol is versioned (`web.aria/v9`)
+   observation into a compact, wording-agnostic symbol. For web apps that symbol is versioned (`web.aria/v10`)
    and records everything a user-facing Playwright test can tell apart.
 2. **Generalize.** UI discovery crawls every screen. The observer probes fields by equivalence class and
    boundary, injects faults (server errors, network failures, malformed bodies, unreadable files, airplane
@@ -136,7 +138,7 @@ teardown cleanroom down  --project P
 | Target | What Teardown observes | Faults it can inject | Requirements | Status |
 |---|---|---|---|---|
 | Command-line tools | Exit code, stdout, diagnostic presence and errno class, file effects | Closed/full stdio, unreadable files, read-only directories | Docker (isolated runner) or local | **Stable** |
-| Web apps | Everything a user-facing Playwright locator or assertion can tell apart (the accessibility tree with roles, names, levels, states and nesting; field values and properties; titles, focus, status messages, landmarks text), plus API method/path/status and public-contract selectors | 5xx, network failure, timeout, malformed body, pending requests | Playwright Chromium; optional backend reset command | **Working**: 96.9–99.2% of hidden tests on the last three held-out apps (see Results) |
+| Web apps | Everything a user-facing Playwright locator or assertion can tell apart (the accessibility tree with roles, names, levels, states and nesting; field values and properties; titles, focus, status messages, landmarks text), plus API method/path/status and public-contract selectors | 5xx, network failure, timeout, malformed body, pending requests, changed responses (server modes); API setup calls to reach deep screens | Playwright Chromium; optional backend reset command | **Working**: 96.9–99.2% of hidden tests on the last three held-out apps (see Results) |
 | Android apps | Controls by role and name with state flags, visible text, system dialogs | Network off (airplane mode) | Android SDK, emulator or device via `adb` | **Working** |
 | Linux desktop apps | AT-SPI tree: windows, controls, text, list items | — | Docker (Xvfb + AT-SPI container) | Experimental |
 | macOS, Windows, iOS | — | — | — | Not started |

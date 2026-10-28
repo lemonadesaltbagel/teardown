@@ -111,6 +111,12 @@ def main(argv: list[str] | None = None) -> int:
     eg.add_argument("--port", type=int, default=3128)
     eg.add_argument("--log", type=Path)
 
+    ap_ = sub.add_parser("api-proxy", help="web targets serving UI and API on one port: an API-only front for "
+                         "the clean side (everything outside the given prefixes answers 404)")
+    ap_.add_argument("--listen", type=int, required=True, help="local port to listen on")
+    ap_.add_argument("--backend", required=True, help="the original's base URL, e.g. http://127.0.0.1:8080")
+    ap_.add_argument("--allow", nargs="+", required=True, help="API path prefixes, e.g. /api /auth")
+
     cr = sub.add_parser("cleanroom", help="enforced clean room on this machine: up | check | shell | down")
     cr.add_argument("action", choices=["up", "check", "shell", "down"])
     cr.add_argument("--project", required=True, type=Path)
@@ -280,6 +286,13 @@ def main(argv: list[str] | None = None) -> int:
         return _review(args)
     elif args.command == "approve":
         return _approve(args)
+    elif args.command == "api-proxy":
+        from teardown.api_proxy import serve as serve_api
+
+        server = serve_api(args.listen, args.backend, args.allow)
+        print(f"API-only proxy on http://127.0.0.1:{server.server_port} -> {args.backend} ({' '.join(args.allow)})",
+              flush=True)
+        server.serve_forever()
     elif args.command == "egress-proxy":
         import time
 

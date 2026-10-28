@@ -1,6 +1,6 @@
 [project]
 name = "teardown"
-version = "0.2.0"
+version = "0.3.0"
 description = "Clean-room, behavior-first analysis of applications: observe black-box, mine falsifiable behavior claims, release a sanitized spec, and differential-test a clean reimplementation."
 readme = "README.md"
 license = "Apache-2.0"
@@ -45,6 +45,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/teardown"]
+
+[tool.hatch.build.targets.sdist]
+# working notes and benchmark harnesses stay out of every distribution, whichever checkout it is built from
+exclude = ["/research", "/spikes", "/bench", "/ops", "/RESEARCH.md", "/DESIGN.md", "/ROADMAP.md",
+           "/DECISION-REPORT.md", "/.teardown", "/.github"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "docs/observer-playbook.md" = "teardown/observer-playbook.md"

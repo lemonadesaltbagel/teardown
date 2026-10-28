@@ -17,6 +17,20 @@ teardown cleanroom shell --project P                          # a shell in the c
 teardown cleanroom down  --project P
 ```
 
+### A backend on the same port as the UI
+
+When the original serves its frontend and its API on one port, allowing that port as `--api` would also let the
+implementer fetch the original's frontend (`cleanroom check` reports it as a failed refusal). Put the API-only
+proxy in front and give its port instead:
+
+```bash
+teardown api-proxy --listen 18090 --backend http://127.0.0.1:8080 --allow /api /auth
+teardown export-clean --project P --out KIT --api http://127.0.0.1:18090
+teardown cleanroom up --project P --kit KIT --api http://127.0.0.1:18090
+```
+
+Requests under the allowed prefixes are forwarded; everything else answers 404.
+
 ## What `up` starts
 
 | | where | sees | network |
