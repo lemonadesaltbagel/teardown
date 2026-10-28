@@ -19,6 +19,13 @@ either with a probe or rule or with a recorded reason. The tool names are the ob
 
 - `discover_ui(feature)`. For screens behind a sign-in, define the sign-in actions and run it again with
   `start=[...]`.
+- **Deep screens** (an editor that needs a record with children, such as an item with variants and a segment):
+  every episode starts from an empty backend, so seed what the screen needs with `request` actions (an API call
+  each, using the endpoints you observed) and run `discover_ui` again from there. A short seeded sequence
+  reaches the screen in seconds where building the records through the UI takes minutes. Keep the UI path for
+  the rules about creating those records themselves.
+- In a large app, work **section by section**: discover, probe and state rules for one section before the
+  next, so the time runs out on the last section rather than on all of them.
 - Read the screens: route, headings, clickable controls, fields, and the controls that only enable once a form is
   filled.
 - `coverage(feature, inventory)` adds your own items:
@@ -55,7 +62,10 @@ State them in your own words, with checks:
 
 - **Navigation and guards:** where each control leads; what happens without a session.
 - **State:** what persists across screens and reloads; what resets, and which action resets it.
-- **Enablement:** which controls are disabled until which input.
+- **Enablement:** which controls are disabled until which input, and **when** they change: as you type, or
+  only once you leave the field. A `fill` does not move focus, so check the state after the fill and again
+  after `press` Tab. Many forms validate on leaving a field; a rule drawn from fills alone ("Create needs the
+  Key typed") can be wrong in a way every recorded check still passes.
 - **Lists:** adding, removing, caps, ordering, duplicates, totals. Reorder in the **middle** as well as at the
   edges, and check where focus goes in each case: a button that becomes disabled at an edge moves focus
   elsewhere, one that stays enabled usually keeps it.

@@ -156,7 +156,7 @@ the same harness. How the evaluation works, and every result with its caveat, is
 | Web apps no model has seen (the last three held-out apps) | **129/130, 126/130, 125/127** |
 | Android apps no model has seen | **113/118** and **100/119** (the second built without any verification feedback) |
 | RealWorld "Conduit" web frontend (tooling tuned against it) | 99/101 |
-| Flipt v1.61.0, a real open-source web app, on its own suite | 17/55 (from 9/55 in the first round): an application many times larger; 21 of its tests need a server mode the observer could not find (see the evaluation notes) |
+| Flipt v1.61.0, a real open-source web app, on its own suite | 19/55 in the fourth round (from 9 in the first): an application many times larger; 21 of its tests need a server mode the observer could not find, and the other misses are sections the coverage report listed as unexplored (see the evaluation notes) |
 
 - **The clones reproduced their specs.** What the hidden suites caught were things the spec did not contain.
 - **The web abstraction is built from a principle.** It records every difference a user-facing Playwright

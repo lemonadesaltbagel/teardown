@@ -116,7 +116,7 @@ def open_driver(target_spec: str, actions: dict[str, dict[str, Any]] | None = No
         return WebDriver(target_spec, actions={k: WebAction.model_validate(v) for k, v in (actions or {}).items()},
                          profile=Profile(**options["profile"]) if options.get("profile") else None,
                          reset_command=options.get("reset_command"), reset_check_url=options.get("reset_check_url"),
-                         contract_selectors=options.get("contract_selectors"))
+                         contract_selectors=options.get("contract_selectors"), api_base=options.get("api_base"))
     if target_spec.startswith("desktop:"):
         from teardown.drivers.desktop.driver import DesktopAction, DesktopDriver
 
@@ -540,6 +540,9 @@ class Project:
         known = feature in state.models or feature in state.probes or feature in state.rules
         if not known and not feature_claims:
             raise KeyError(f"nothing learned, probed or claimed for feature {feature!r}")
+        if feature in state.coverage:  # the gaps as they are now: the unknowns below include them
+            self.coverage(feature)
+            state = self.state
         record = self.workspace.get(state.models[feature], ModelRecord) if feature in state.models else None
         probes = self.workspace.get(state.probes[feature], ProbeTable) if feature in state.probes else None
         from teardown.engine.rules import RuleTable
@@ -1478,6 +1481,12 @@ class Project:
                     value = R.describe_symbol(out) if isinstance(out, str) else None
                     for entry in (value.get("network") or []) if isinstance(value, dict) else []:
                         seen.setdefault(entry)
+                from teardown.core.model import Evidence
+
+                for ev in r.evidences:  # calls a hang fault held were made too, though never answered
+                    payload = self.workspace.get(ev, Evidence).payload
+                    for method, path in (payload.get("held") or []) if isinstance(payload, dict) else []:
+                        seen.setdefault(f"{method} {path} held")
                 calls[r.probe.id] = list(seen)
             second = {r.probe.id: r.symbol for r in run_sequences(self._worker_session, seq_probes, workers=workers)}
         else:
@@ -1730,6 +1739,11 @@ class Project:
                 options = adapter["target_options"]
             elif clone_target.split(":", 1)[0] == self.state.target_spec.split(":", 1)[0]:
                 options = self.state.target_options
+                if clone_target.startswith("web:"):  # its `request` setup steps go to the same backend
+                    from urllib.parse import urljoin
+
+                    options = {**options, "api_base": options.get("api_base")
+                               or urljoin(self.state.target_spec.removeprefix("web:"), "/")}
             else:
                 options = None
             driver = open_driver(clone_target, adapter.get("actions") or rel.spec.get("actions") or {}, options)

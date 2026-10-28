@@ -97,13 +97,23 @@ def fill_action(platform: str, role: str, name: str, options: list[str] | None =
         return f"select[{name}]={label}", {"op": "select", "role": role, "name": name, "value": label}
     value = SAMPLE[guess_kind(name)]
     if platform == "web":
-        return f"fill[{name}]=sample", {"op": "fill", "role": role, "name": name, "value": value}
+        return f"fill[{name}]=sample", {"op": "fill", "role": role, **_web_name(name), "value": value}
     return f"fill[{name}]=sample", {"action": "fill", "role": role, "name": name, "value": value}
+
+
+_MASKED = re.compile(r"<(?:ago|time|date|masked)>")
+
+
+def _web_name(name: str) -> dict[str, Any]:
+    """A name the abstraction masked ("Created <ago>") is not the element's real name: match the rest of it."""
+    if not _MASKED.search(name):
+        return {"name": name}
+    return {"name": "^" + ".+?".join(re.escape(part) for part in _MASKED.split(name)) + "$", "name_regex": True}
 
 
 def click_action(platform: str, role: str, name: str) -> tuple[str, dict[str, Any]]:
     if platform == "web":
-        return f"click[{role}:{name}]", {"op": "click", "role": role, "name": name}
+        return f"click[{role}:{name}]", {"op": "click", "role": role, **_web_name(name)}
     return f"click[{role}:{name}]", {"action": "click", "role": role, "name": name}
 
 

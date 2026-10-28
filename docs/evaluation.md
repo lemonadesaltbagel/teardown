@@ -36,7 +36,7 @@ what it does not.
 | Novel web apps, held out (9 apps) | spec only, both sides confined | 53% → 99.2% across abstraction versions; **96.9–99.2% on the last three** | apps written for the benchmark; each round's misses were recorded in the next abstraction version, so the later rounds measure the improved tool |
 | RealWorld "Conduit" frontend | spec plus its public selectors contract | 99/101 | development set: the tooling was tuned against this suite, and the implementer recognized the app |
 | Novel Android apps (2 apps) | spec only, both sides confined | 113/118 (95.8%) and 100/119 (84.0%) | the second clone was built without any verification feedback (the emulator failed during the session) |
-| Flipt v1.61.0, a real open-source web app | spec only, scored on its own Playwright suite | 17/55 (30.9%) with its announcement banner off, as in Flipt's CI (13/55 as built); the first round scored 9/55 | development set: the tooling was improved on the first round's misses. 21 of the 55 tests mock a read-only mode that the server leaves out of its responses, so observation never reached it (2 of those 21 pass, 15 of the other 34). The implementer's session ended at its 2-hour limit after four verify calls. Tests that reach elements by CSS or test id cannot be expected to match |
+| Flipt v1.61.0, a real open-source web app | spec only, scored on its own Playwright suite | four rounds: 9, 17, 11, then **19/55** (34.5%) | development set: the tooling was improved on the first round's misses. 21 of the 55 tests mock a read-only mode that the server leaves out of its responses, so observation never reached it (2 of those 21 pass, 15 of the other 34). The third round's observations missed short-lived notifications (a settling bug in the web driver, fixed for the fourth). In the fourth round the clone passed every conformance test it could be judged on (163 of 164), and its misses on the suite were, almost one for one, the coverage gaps the observer had left unexplained. Tests that reach elements by CSS or test id cannot be expected to match |
 
 What these numbers support:
 
@@ -46,8 +46,9 @@ What these numbers support:
   remaining misses are states the observer did not exercise, not structure the spec failed to record.
 - **Web, on a real application:** the method does not yet carry over to an application of Flipt's size. A
   second round with the improved tooling (time budgets, server-mode faults, faster verification) nearly
-  doubled the score, to 31%. What remains is mostly sections the observer did not reach in its time (rule and
-  rollout editing), a server mode that never appears in a response, and implementation time.
+  doubled the score, and a fourth reached 35%. What remains is a server mode that never appears in a response
+  (21 tests) and the sections the observer did not reach in its time, which the coverage report lists before
+  any scoring.
 - **Strict gate:** in the strict rounds a person approved each release at their own terminal with two or three
   class-level decisions, and the audit log recorded each one.
 - **Enforced isolation costs nothing in outcome:** releases reimplemented inside the clean-room container scored

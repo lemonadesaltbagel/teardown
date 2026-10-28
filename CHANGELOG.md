@@ -2,8 +2,28 @@
 
 ## Unreleased
 
-- Results: a second round on Flipt with the tooling improved since the first (development set) scored 17/55 on
-  its own UI suite, up from 9/55.
+- A web name pattern drops Python-only leading flags such as `(?i)` (patterns run as JavaScript and already
+  ignore case), and other Python-only syntax is refused when the action is defined instead of crashing an
+  episode. `compile_spec` judges the coverage gaps as they are now.
+
+- Web settling no longer trusts a running count of requests: a request whose finishing event never arrived
+  (cancelled by a navigation) kept every later observation waiting for the whole settle timeout, so a
+  notification shown for three seconds was gone by the time the page was read. On Flipt this hid every
+  "Successfully created" message from the third round's spec; observations after an action now take about 0.1
+  seconds there instead of 3.
+
+- Actions that discovery generates for names with masked parts ("Created <ago>") match the element's real name
+  (a pattern with those parts open); they used to match nothing. A `hang` fault counts as met when the call it
+  holds was made (held calls are recorded apart from `network`, so no symbol changes).
+
+- A `request` web action makes one API call as setup (with the browser's cookies, not counted as UI traffic), so
+  a sequence can create the records a deep screen needs in one step instead of minutes of UI. Verification runs
+  it against the same backend for the clone. On Flipt the observer did not reach the rule and rollout editors,
+  which need a flag with variants and a segment built first, and those were most of the remaining misses.
+
+- Results: Flipt (development set) on its own UI suite over four rounds: 9, 17, 11 (observations missed
+  short-lived notifications: the settling bug above), then 19/55, with the clone passing 163 of 164 conformance
+  tests.
 
 - The gate runs one verification at a time (a second call waits its turn), and a call the gate itself could
   not finish (the original went away mid-episode) does not count against the budget. On Flipt, the

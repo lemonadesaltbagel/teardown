@@ -232,6 +232,7 @@ class SequenceResult:
     evidence: str
     symbol: str
     outputs: list[str]
+    evidences: list[str] = field(default_factory=list)  # one per step
 
 
 def run_sequences(open_session: Callable[[], ObservationSession], probes: list[SequenceProbe], *,
@@ -246,7 +247,8 @@ def run_sequences(open_session: Callable[[], ObservationSession], probes: list[S
         try:
             for i, p in chunk:
                 outputs, evidence, _ = session.run(p.inputs, use_cache=False)
-                out.append((i, SequenceResult(p, evidence[-1] if evidence else "", outputs[-1], outputs)))
+                out.append((i, SequenceResult(p, evidence[-1] if evidence else "", outputs[-1], outputs,
+                                              list(evidence))))
         finally:
             session.close()
         return out

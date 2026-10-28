@@ -330,8 +330,9 @@ def test_coverage_lists_every_observed_endpoint_by_fault_class(site, tmp_path):
     assert open_gaps() == ["fault GET /quotes.json 5xx", "fault GET /quotes.json malformed"]
     project.open_target("web:" + site.url("fetcher.html"), purpose="research",
                         target_options={"api_templates": ["/{file}"]})
-    project.coverage("quotes")
+    draft = project.compile_spec("quotes")  # compiling judges the gaps as they are now, without a coverage call
     assert open_gaps() == ["fault GET /{file} 5xx", "fault GET /{file} malformed"]
+    assert not [u for u in draft.unknowns if "/quotes.json" in u.identity.question and u.status == "open"]
     with pytest.raises(ValueError, match="define_actions"):
         project.check_rules("quotes", [{"statement": "x", "checks": [
             {"kind": "outcome", "a": {"actions": [{"op": "click", "role": "button", "name": "Load quotes"}]},
@@ -1039,6 +1040,12 @@ def test_a_fault_met_while_the_page_loaded_counts_for_coverage(tmp_path):
             {"kind": "outcome", "a": {"actions": ["other_down", "home"]}, "expect": {"text": ["1 items"]},
              "keys": ["text"]}]}], workers=1)
         assert "faults_not_met" not in out["rules"][0] and out["rules"][1]["faults_not_met"] == ["other_down"]
+        project.define_actions({"hold": {"op": "fault", "fault": {"path": "/data.json", "mode": "hang"}}})
+        held = project.check_rules("home", [{"statement": "While the data is pending the page says Loading.",
+                                             "checks": [{"kind": "outcome", "a": {"actions": ["hold", "home"]},
+                                                         "expect": {"text": ["Loading"]}, "keys": ["text"]}]}],
+                                   workers=1)
+        assert held["rules"][0]["status"] == "corroborated" and "faults_not_met" not in held["rules"][0]
         counts = project.coverage("home", record_unknowns=False)["counts"]
         assert counts["fault GET /data.json network"] == 1  # the call was made while the page loaded, not at the end
         draft = project.compile_spec("home")  # the recorded calls credit coverage only: not part of the spec
@@ -1150,3 +1157,136 @@ def test_clear_storage_replays_a_first_visit_so_a_fault_meets_its_call(tmp_path)
         assert project.coverage("home", record_unknowns=False)["counts"]["fault GET /self.json network"] == 1
     finally:
         local.close()
+
+
+def test_a_request_action_seeds_the_backend_for_original_and_clone(tmp_path):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    items: list[str] = []
+    page = ('<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Items</title></head><body><main>'
+            '<h1>Items</h1><ul id="l"></ul><script>fetch("API/api/items").then(r=>r.json()).then(d=>{'
+            'for (const n of d.items) { const li=document.createElement("li"); li.textContent=n; '
+            'document.getElementById("l").appendChild(li); }});</script></main></body></html>')
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, code, body, kind="application/json"):
+            data = body.encode()
+            self.send_response(code)
+            self.send_header("Content-Type", kind)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):  # noqa: N802
+            if self.path == "/api/items":
+                return self._send(200, json.dumps({"items": items}))
+            return self._send(200, page.replace("API", api), "text/html")
+
+        def do_POST(self):  # noqa: N802
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if not body.get("name"):
+                return self._send(400, '{"error": "name required"}')
+            items.append(body["name"])
+            return self._send(201, "{}")
+
+    servers = [ThreadingHTTPServer(("127.0.0.1", 0), Handler) for _ in range(2)]  # the app and a "clone"
+    for s in servers:
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+    api = f"http://127.0.0.1:{servers[0].server_port}"
+    try:
+        project = Project(tmp_path / "p")
+        project.open_target(f"web:{api}/", purpose="research")
+        project.define_actions({
+            "seed": {"op": "request", "request": {"method": "POST", "path": "/api/items", "body": {"name": "Kestrel"}}},
+            "bad_seed": {"op": "request", "request": {"method": "POST", "path": "/api/items", "body": {}}},
+            "reload": {"op": "reload"}})
+        from teardown.core.model import Evidence
+
+        session = project.session()
+        session.reset()
+        seeded, _ = session.step("seed")
+        _, symbol = session.step("reload")
+        assert "Kestrel" in symbol
+        assert not any(e.startswith("POST") for e in project.workspace.get(seeded, Evidence).payload["network"])
+        assert session.step("bad_seed")[1] == "NA"  # a refused setup call makes the step unavailable
+        session.close()
+        from types import SimpleNamespace
+
+        rel = SimpleNamespace(spec={"actions": project.action_table(), "abstraction": {"builtin": "web.aria/v10"}})
+        verifying = project.verifier().open_clone(f"web:http://127.0.0.1:{servers[1].server_port}/", rel, None)
+        assert verifying.driver.api_base == api + "/"  # a clone's setup steps go where the original's went
+        verifying.close()
+
+        from teardown.drivers.web.driver import WebAction, WebDriver
+
+        clone = WebDriver(f"web:http://127.0.0.1:{servers[1].server_port}/", api_base=api + "/",
+                          actions={"seed": WebAction.model_validate(project.action_table()["seed"])})
+        try:
+            clone.reset()
+            items.clear()
+            from teardown.drivers.base import Action
+
+            clone.step(Action(name="seed"))
+            assert items == ["Kestrel"]  # the clone's setup went to the shared backend, not its own origin
+        finally:
+            clone.close()
+    finally:
+        for s in servers:
+            s.shutdown()
+
+
+def test_a_request_whose_finish_was_never_seen_does_not_hold_later_observations():
+    """On Flipt two requests of the first page load never reported finishing; every later observation then waited
+    out the settle timeout, and a three-second "Successfully created" notification was gone when the page was
+    read."""
+    import time
+
+    class Request:
+        def __init__(self, end):
+            self.timing = {"responseEnd": end}
+
+    d = WebDriver("web:http://127.0.0.1:9/")
+    now = time.monotonic()
+    answered = Request(12.5)  # its finishing event was missed
+    lost = Request(-1)  # cancelled by a navigation, long ago
+    waiting = Request(-1)  # really in flight
+    d._pending = {answered: now, lost: now - 60, waiting: now}
+    assert d._in_flight() == 1 and list(d._pending) == [waiting]
+
+def test_actions_for_masked_names_match_the_real_names(tmp_path):
+    from teardown.engine.discovery import click_action
+
+    name, action = click_action("web", "link", "Admins • Created <ago> • Updated <ago>")
+    assert name == "click[link:Admins • Created <ago> • Updated <ago>]" and action["name_regex"] is True
+    assert click_action("web", "button", "Save")[1] == {"op": "click", "role": "button", "name": "Save"}
+    root = tmp_path / "site"
+    root.mkdir()
+    (root / "home.html").write_text(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>H</title></head><body><main>'
+        '<a href="#done" onclick="document.getElementById(\'o\').textContent=\'Opened\'">Admins • Created 3 '
+        'seconds ago • Updated (1+1) minutes ago</a><p id="o">Closed</p></main></body></html>')
+    local = LocalSite(root)
+    d = WebDriver("web:" + local.url("home.html"))
+    try:
+        d.reset()
+        assert "Opened" in json.dumps(d.step(_act(**action)))  # the masked parts match what the page shows
+    finally:
+        d.close()
+        local.close()
+
+
+def test_name_patterns_drop_python_inline_flags_and_refuse_python_only_syntax():
+    from pydantic import ValidationError
+
+    from teardown.drivers.web.driver import WebAction
+
+    assert WebAction.model_validate({"op": "click", "role": "option", "name": "(?i)^color",
+                                     "name_regex": True}).name == "^color"  # it crashed in the browser before
+    with pytest.raises(ValidationError, match="Python-only"):
+        WebAction.model_validate({"op": "click", "role": "option", "name": "(?P<k>x)", "name_regex": True})
+    assert WebAction.model_validate({"op": "click", "role": "button", "name": "(?i) literal"}).name == "(?i) literal"

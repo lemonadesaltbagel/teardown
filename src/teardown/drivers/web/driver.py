@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urljoin, urlparse
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from teardown.core.ids import content_id
 from teardown.drivers.base import Action, Driver, DriverCapabilities
@@ -38,7 +38,7 @@ class WebAction(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     op: Literal["click", "fill", "check", "uncheck", "select", "press", "goto", "fault", "back", "forward",
-                "reload", "clear_storage"]
+                "reload", "clear_storage", "request"]
     role: str | None = None
     name: str | None = None
     name_regex: bool = False
@@ -48,6 +48,26 @@ class WebAction(BaseModel):
                             "(0-based, document order); default the first")
     within: dict[str, str] | None = Field(default=None, description="scope the lookup to a container by role and "
                                           "name, e.g. {'role': 'dialog', 'name': 'Delete boat?'}")
+    @model_validator(mode="before")
+    @classmethod
+    def _portable_pattern(cls, data: Any) -> Any:
+        """A name pattern runs in the browser (JavaScript): Python-only inline flags such as ``(?i)`` would break
+        it. Matching is case-insensitive already, so leading flags are dropped; other Python-only syntax is
+        refused here rather than failing in the middle of an episode."""
+        if isinstance(data, dict) and data.get("name_regex") and isinstance(data.get("name"), str):
+            name = re.sub(r"^\(\?[aiLmsux]+\)", "", data["name"])
+            if re.search(r"\(\?[aiLmsux-]+[:)]|\(\?P[<=>]|\\[AZ]", name):
+                raise ValueError(f"name pattern {data['name']!r} uses Python-only syntax; patterns run as "
+                                 "JavaScript regular expressions (case-insensitive already)")
+            re.compile(name)
+            data = {**data, "name": name}
+        return data
+
+    request: dict[str, Any] | None = Field(
+        default=None, description="op=request: {method, path (on the API base), body (JSON, optional)}: an API call "
+                                  "made as setup, with the browser's cookies, so a sequence can create the records a "
+                                  "deep screen needs in one step. It is not UI traffic: coverage does not count it, "
+                                  "and a status of 400 or more makes the step unavailable.")
     fault: dict[str, Any] | None = Field(
         default=None, description="op=fault: {path: glob on the API path ('*' within a segment, '**' across), "
                                   "mode: status|abort|timeout|malformed|hang|patch, "
@@ -411,8 +431,9 @@ class WebDriver(Driver):
 
     def __init__(self, target_spec: str, actions: dict[str, WebAction] | None = None, profile: Profile | None = None,
                  reset_command: list[str] | None = None, reset_check_url: str | None = None,
-                 contract_selectors: dict[str, Any] | None = None):
+                 contract_selectors: dict[str, Any] | None = None, api_base: str | None = None):
         self.url = target_spec.removeprefix("web:")
+        self.api_base = api_base or urljoin(self.url, "/")  # where `request` actions go
         self.table = dict(actions or {})
         self.profile = profile or Profile()
         self.reset_command = list(reset_command or [])
@@ -426,9 +447,10 @@ class WebDriver(Driver):
         self.blocked: set[tuple[str, str]] = set()  # (host, resource type) the gate refused, across episodes
         self._ctx = None
         self.page = None
-        self._inflight = 0
+        self._pending: dict[Any, float] = {}  # request -> when it started
         self._requests_since_observe = 0
         self._exchanges = []
+        self._held_calls: list[tuple[str, str]] = []
 
     @staticmethod
     def _contract_list(spec: dict[str, Any] | None) -> list[str]:
@@ -501,18 +523,19 @@ class WebDriver(Driver):
 
             self._ctx.route("**/*", gate)
         self.page = self._ctx.new_page()
-        self._inflight = 0
+        self._pending = {}
         self._held, self._hang_handlers, self._fault_handlers = [], [], []
         self._requests_since_observe = 1  # the initial navigation always settles
 
         self._exchanges: list[dict[str, Any]] = []
+        self._held_calls = []
 
-        def started(_request):
-            self._inflight += 1
+        def started(request):
+            self._pending[request] = time.monotonic()
             self._requests_since_observe += 1
 
         def ended(request):
-            self._inflight = max(0, self._inflight - 1)
+            self._pending.pop(request, None)
             if request.resource_type in ("xhr", "fetch"):
                 status, response_shape = None, None
                 try:
@@ -563,6 +586,17 @@ class WebDriver(Driver):
         if a.op == "goto":  # relative paths resolve against the target's root, so specs stay portable to clones
             page.goto(urljoin(self.url, a.value or ""), wait_until="load")
             return "ok"
+        if a.op == "request":
+            req = a.request or {}
+            path, method = str(req.get("path") or ""), str(req.get("method") or "GET").upper()
+            if not path.startswith("/") or method not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+                raise ValueError("a request action needs {method: GET|POST|PUT|PATCH|DELETE, path: '/...'}")
+            body = req.get("body")
+            response = self._ctx.request.fetch(
+                urljoin(self.api_base, path.lstrip("/")), method=method,
+                **({"data": json.dumps(body), "headers": {"Content-Type": "application/json"}}
+                   if body is not None else {}))
+            return "ok" if response.status < 400 else "absent"
         if a.op == "clear_storage":  # a first-time visitor: no cookies or web storage (faults stay installed)
             self._ctx.clear_cookies()
             page.evaluate("() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} }")
@@ -628,7 +662,22 @@ class WebDriver(Driver):
         while time.monotonic() < deadline and quiet < 2:
             self.page.wait_for_timeout(10)
             # requests held by a 'hang' fault are pending on purpose: they do not keep the page unsettled
-            quiet = quiet + 1 if self._inflight <= len(self._held) else 0
+            quiet = quiet + 1 if self._in_flight() <= len(self._held) else 0
+
+    def _in_flight(self) -> int:
+        """Requests still waiting for an answer. A request whose finishing event never arrived (one cancelled by
+        a navigation, for instance) must not hold every later observation for the whole settle timeout, where
+        a notification shown for three seconds is gone before the page is read: one with a response already
+        received is done, and one older than the settle timeout no longer counts."""
+        stale = time.monotonic() - self.profile.settle_timeout_ms / 1000
+        for request, since in list(self._pending.items()):
+            try:
+                finished = request.timing.get("responseEnd", -1) >= 0
+            except Exception:  # noqa: BLE001 - the page or request is gone
+                finished = True
+            if finished or since < stale:
+                self._pending.pop(request, None)
+        return len(self._pending)
 
     def _install_fault(self, fault: dict[str, Any]) -> None:
         """Fault injection for observation: matching XHR/fetch responses *as received by this browser* are replaced
@@ -662,8 +711,9 @@ class WebDriver(Driver):
                 return route.abort("failed")
             if mode == "timeout":
                 return route.abort("timedout")
-            if mode == "hang":
+            if mode == "hang":  # the call was made but has no answer yet: kept apart from `network`
                 self._held.append(route)
+                self._held_calls.append((req.method, path_template(req.url)))
                 return None
             if mode == "malformed":
                 return route.fulfill(status=200, content_type="application/json", body="{not json")
@@ -733,6 +783,7 @@ class WebDriver(Driver):
                     break
                 snap = again
         exchanges, self._exchanges = self._exchanges, []
+        held, self._held_calls = self._held_calls, []
         url = urlparse(self.page.url)
         return {
             "path": (url.path or "/") + (f"?{url.query}" if url.query else ""),
@@ -743,6 +794,8 @@ class WebDriver(Driver):
             # API exchanges since the previous observation: method, templated path, status. Never bodies.
             "network": sorted({(e["method"], e["path"], e["status"]) for e in exchanges},
                               key=lambda t: (t[0], t[1], t[2] or 0)),
+            # calls a hang fault is holding (made, not answered): for fault coverage only, not in any symbol
+            **({"held": sorted(set(held))} if held else {}),
             # value-free JSON shapes of API bodies (keys and types only): the interface, not the data
             "api_shapes": [e for e in exchanges if e.get("request_shape") or e.get("response_shape")],
             **({"contract": self.page.evaluate(_CONTRACT_PROBE, self.contract)} if self.contract else {}),

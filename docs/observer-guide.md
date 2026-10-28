@@ -111,7 +111,12 @@ p.api_contract()                                                       # value-f
 
 - Actions address elements by **ARIA role and accessible name** only.
   - **Fields:** `op` is one of click, fill, check, uncheck, select, press, goto, back, forward, reload, fault,
-    clear_storage (a first-time visitor: cookies and web storage cleared; reload or goto afterwards).
+    clear_storage (a first-time visitor: cookies and web storage cleared; reload or goto afterwards), request.
+  - **Setup through the API:** `{"op": "request", "request": {"method": "POST", "path": "/api/items", "body":
+    {"name": "Kestrel"}}}` makes one API call with the browser's cookies, so a sequence can create the records a
+    deep screen needs in one step, then `goto` it. It is setup, not UI behavior: coverage does not count it, a
+    status of 400 or more makes the step unavailable (`NA`), and verification runs it against the same backend
+    for the clone. Paths go to `target_options["api_base"]`, by default the target's own origin.
     `value` holds the typed text, the selected option, the key, or (for `goto`) the root-relative URL.
   - **Same-named controls** (a page button and a dialog's confirm button): `within: {"role": "dialog",
     "name": ...}` scopes the lookup, and `nth` picks one among several matches.
@@ -160,7 +165,10 @@ p.api_contract()                                                       # value-f
   flattened into `text`; `v3`: no landmarks; `v4`: no `generated`; `v5`: dialogs without roles, no
   `descriptions`; `v6`: no `aria-invalid` flag, row headers or groups; `v7`: no `outline` or `properties`; `v8`: a focused heading or landmark recorded by its tag alone, `h2:`; `v9`: no hash routes in `path`, no time-of-day or relative-time masking).
 - Rules on UIs compare **sequences**: `{"actions": [...]}` on each side; restrict `keys` to what the rule is about
-  (`controls`, `path`, `alerts`, `network`) so incidental text does not break the relation.
+  (`controls`, `path`, `alerts`, `network`) so incidental text does not break the relation. `network` lists the
+  calls made since the previous step, so a call that sometimes lands after the page is read (a refetch, a
+  background poll) makes a rule on it contested: name only the call the rule is about in an `expect`, or leave
+  `network` out.
 - Field probes find length limits, a minimum (`len_at_min`, `len_under_min`) as well as a maximum
   (`len_at_max`, `len_over_max`), and classify refusals as client-side (submit disabled / no request) or
   server-side. A value counts as refused when its submit ends differently from the known-good one: another
